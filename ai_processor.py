@@ -395,8 +395,8 @@ Return strictly as a JSON array, no extra text:
 
 def generate_joke(items: list[dict]) -> list[str]:
     """
-    Generate 2 short witty jokes grounded in today's real news.
-    Returns a list of 2 joke strings, or [] on failure.
+    Generate up to 10 jokes grounded in today's real news (score >= 4 kept).
+    Returns a list of joke strings (pool for frontend cycling), or [] on failure.
     """
     if not config.DEEPSEEK_API_KEY or not items:
         return []
@@ -421,21 +421,21 @@ def generate_joke(items: list[dict]) -> list[str]:
 今天的新闻（只能从这里取材，不能编造）：
 {news_list}
 
-任务：尝试写最多两条段子，取材自不同的新闻事件。
+任务：尽量写10条段子，每条取材自不同的新闻事件。
 - 形式不限：对话、冷笑话、神转折、讽刺评论均可
 - 语言要辛辣、有反转、让人会心一笑
 - 每条不超过70个汉字
-- 对每条段子，用你自己的标准诚实打分（1~5分），只有真的好笑才算高分
-- 如果新闻素材实在无法写出好笑话，score 打低分即可，不要强行编
+- 对每条段子诚实打分（1~5分），只有真的好笑才算高分
+- 如果某条写得不好，score 打低分即可，不要强行编凑数
 
 严格按以下 JSON 数组返回，不要任何额外文字：
-[{{"joke": "段子内容", "score": 4}}, {{"joke": "段子内容", "score": 3}}]"""
+[{{"joke": "段子内容", "score": 4}}, ...]"""
 
     try:
         resp = _get_client().chat.completions.create(
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
+            max_tokens=1500,
             temperature=0.9,
         )
         raw = resp.choices[0].message.content.strip()
@@ -444,7 +444,7 @@ def generate_joke(items: list[dict]) -> list[str]:
             raise ValueError("No JSON array")
         parsed = json.loads(raw[start:end + 1])
         cleaned = []
-        for item in parsed[:2]:
+        for item in parsed[:10]:
             joke = str(item.get("joke", "")).strip()
             score = int(item.get("score", 0))
             if joke and score >= 4:

@@ -276,11 +276,10 @@ def digest_summary(lang: str = "zh"):
 
 
 @app.get("/api/joke")
-def get_joke(refresh: bool = False):
-    """Return cached daily jokes grounded in today's news; regenerate every 2 hours."""
+def get_joke():
+    """Return cached joke pool (up to 10); regenerate every 30 min."""
     global _joke_cache, _joke_cache_at
-    _JOKE_TTL = 30 * 60  # 30 minutes
-    if not refresh and _joke_cache and time.time() - _joke_cache_at < _JOKE_TTL:
+    if _joke_cache and time.time() - _joke_cache_at < _CACHE_TTL:
         return {"jokes": _joke_cache}
     import ai_processor
     posts_by_cat = storage.get_recent_posts_by_category(hours=24, limit_per_category=10)
@@ -1245,21 +1244,42 @@ async function loadBriefing() {
 }
 
 // ── Digest ────────────────────────────────────────────────────────────────
+let _jokePool = [];
+let _jokeIdx = 0;
+const _JOKE_EXHAUSTED = '新闻太无聊，没段子了，别刷了 🙃';
+
+function _renderJoke(jokes) {
+  const el = document.getElementById('jokeBody');
+  el.textContent = '';
+  jokes.forEach(j => {
+    const div = document.createElement('div');
+    div.className = 'joke-item';
+    div.textContent = j;
+    el.appendChild(div);
+  });
+}
+
 async function loadJoke(refresh = false) {
   const el = document.getElementById('jokeBody');
+  if (refresh && _jokePool.length > 0) {
+    // Cycle locally — no API call
+    _jokeIdx++;
+    if (_jokeIdx >= _jokePool.length) {
+      el.textContent = _JOKE_EXHAUSTED;
+      return;
+    }
+    _renderJoke([_jokePool[_jokeIdx]]);
+    return;
+  }
+  // Initial load: fetch from API
   el.innerHTML = '<span class="panel-loading">' + t('jokeLoading') + '</span>';
   try {
-    const url = '/api/joke' + (refresh ? '?refresh=true' : '');
-    const data = await fetch(url).then(r => r.json());
-    const jokes = Array.isArray(data.jokes) ? data.jokes : [];
-    if (!jokes.length) { el.textContent = '今日新闻太无聊，段子写不出来。'; return; }
-    el.textContent = '';
-    jokes.forEach(j => {
-      const div = document.createElement('div');
-      div.className = 'joke-item';
-      div.textContent = j;
-      el.appendChild(div);
-    });
+    const data = await fetch('/api/joke').then(r => r.json());
+    _jokePool = Array.isArray(data.jokes) ? data.jokes : [];
+    _jokeIdx = 0;
+    _jokeExhaustedIdx = 0;
+    if (!_jokePool.length) { el.textContent = '今日新闻太无聊，段子写不出来。'; return; }
+    _renderJoke([_jokePool[0]]);
   } catch(e) { el.textContent = t('jokeFail'); }
 }
 
