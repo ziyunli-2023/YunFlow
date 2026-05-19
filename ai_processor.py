@@ -416,21 +416,20 @@ def generate_joke(items: list[dict]) -> list[str]:
             lines.append(f"{i+1}. {title}")
     news_list = "\n".join(lines)
 
-    prompt = f"""你是一位毒舌财经脱口秀编剧，擅长把今天真实发生的新闻事件改编成对话体幽默段子。
+    prompt = f"""你是一位毒舌财经脱口秀编剧，擅长把今天真实发生的新闻事件改编成幽默段子。
 
 今天的新闻（只能从这里取材，不能编造）：
 {news_list}
 
-要求：
-- 严格基于上面的真实新闻，不能捏造不存在的事件
-- 写两条不同的段子，取材自不同的新闻事件
+任务：尝试写最多两条段子，取材自不同的新闻事件。
 - 形式不限：对话、冷笑话、神转折、讽刺评论均可
 - 语言要辛辣、有反转、让人会心一笑
 - 每条不超过70个汉字
-- 两条段子之间用 "---" 分隔
-- 只输出段子本身，不要任何编号、标题或解释
+- 对每条段子，用你自己的标准诚实打分（1~5分），只有真的好笑才算高分
+- 如果新闻素材实在无法写出好笑话，score 打低分即可，不要强行编
 
-直接输出两条段子："""
+严格按以下 JSON 数组返回，不要任何额外文字：
+[{{"joke": "段子内容", "score": 4}}, {{"joke": "段子内容", "score": 3}}]"""
 
     try:
         resp = _get_client().chat.completions.create(
@@ -440,14 +439,15 @@ def generate_joke(items: list[dict]) -> list[str]:
             temperature=0.9,
         )
         raw = resp.choices[0].message.content.strip()
-        jokes = [j.strip() for j in raw.split("---") if j.strip()]
-        # Strip any leading label the model might add
+        start, end = raw.find("["), raw.rfind("]")
+        if start == -1 or end == -1:
+            raise ValueError("No JSON array")
+        parsed = json.loads(raw[start:end + 1])
         cleaned = []
-        for joke in jokes[:2]:
-            for prefix in ["段子：", "笑话：", "今日笑话：", "："]:
-                if joke.startswith(prefix):
-                    joke = joke[len(prefix):].strip()
-            if joke:
+        for item in parsed[:2]:
+            joke = str(item.get("joke", "")).strip()
+            score = int(item.get("score", 0))
+            if joke and score >= 4:
                 cleaned.append(joke)
         return cleaned
     except Exception as e:

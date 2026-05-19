@@ -1252,7 +1252,7 @@ async function loadJoke(refresh = false) {
     const url = '/api/joke' + (refresh ? '?refresh=true' : '');
     const data = await fetch(url).then(r => r.json());
     const jokes = Array.isArray(data.jokes) ? data.jokes : [];
-    if (!jokes.length) { el.textContent = t('jokeFail'); return; }
+    if (!jokes.length) { el.textContent = '今日新闻太无聊，段子写不出来。'; return; }
     el.textContent = '';
     jokes.forEach(j => {
       const div = document.createElement('div');
