@@ -26,6 +26,8 @@ _briefing_cache: dict = {}   # keyed by lang
 _briefing_cache_at: dict = {}
 _digest_cache: dict = {}     # keyed by lang
 _digest_cache_at: dict = {}
+_joke_cache: list = []
+_joke_cache_at: float = 0
 
 # ── WebSocket connection manager ───────────────────────────────────────────
 class ConnectionManager:
@@ -273,6 +275,26 @@ def digest_summary(lang: str = "zh"):
     return {"summary": result}
 
 
+@app.get("/api/joke")
+def get_joke(refresh: bool = False):
+    """Return cached daily jokes grounded in today's news; regenerate every 2 hours."""
+    global _joke_cache, _joke_cache_at
+    _JOKE_TTL = 30 * 60  # 30 minutes
+    if not refresh and _joke_cache and time.time() - _joke_cache_at < _JOKE_TTL:
+        return {"jokes": _joke_cache}
+    import ai_processor
+    posts_by_cat = storage.get_recent_posts_by_category(hours=24, limit_per_category=10)
+    all_posts = []
+    for posts in posts_by_cat.values():
+        all_posts.extend(posts[:5])
+    items = [{"type": "post", "data": p} for p in all_posts]
+    result = ai_processor.generate_joke(items)
+    if result:
+        _joke_cache = result
+        _joke_cache_at = time.time()
+    return {"jokes": _joke_cache}
+
+
 @app.get("/api/briefing")
 def daily_briefing(lang: str = "zh", refresh: bool = False):
     """Return cached daily briefing; regenerate if cache is older than 30 min."""
@@ -408,6 +430,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .panel-loading { font-size: 14px; color: var(--muted); padding: 4px 0; }
 
   /* ── Digest ── */
+  .joke-panel { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid #f59e0b; border-radius: 12px; padding: 14px 18px; margin-bottom: 14px; }
+  .joke-item { font-size: 14px; color: var(--text); line-height: 1.8; white-space: pre-wrap; padding: 10px 0; }
+  .joke-item + .joke-item { border-top: 1px solid var(--border); }
   .digest-panel { background: var(--accent-bg); border: 1px solid var(--border); border-radius: 12px; padding: 14px 18px; margin-bottom: 14px; }
   .digest-text { font-size: 16px; color: var(--text2); line-height: 1.75; }
   .digest-text a { color: inherit; text-decoration: none; }
@@ -518,7 +543,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .feed { padding: 10px 12px; padding-bottom: 70px; }
     .card { padding: 12px 14px; }
     .card-title { font-size: 17px; }
-    .briefing-panel, .digest-panel { padding: 12px 14px; }
+    .briefing-panel, .digest-panel, .joke-panel { padding: 12px 14px; }
     .bottom-nav { display: flex; position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface); border-top: 1px solid var(--border); z-index: 100; padding-bottom: env(safe-area-inset-bottom); }
   }
   @media (min-width: 720px) { .bottom-nav { display: none !important; } }
@@ -640,6 +665,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="digest-text" id="digestText"><span class="panel-loading" data-i18n="loadingDigest">正在生成摘要…</span></div>
       </div>
 
+      <!-- 今日笑话 -->
+      <div class="joke-panel">
+        <div class="panel-header">
+          <div class="panel-title" data-i18n="jokeTitle">😂 今日笑话</div>
+          <div class="panel-actions">
+            <button class="refresh-btn" onclick="loadJoke(true)">↻ 刷新</button>
+          </div>
+        </div>
+        <div id="jokeBody"><span class="panel-loading">正在生成…</span></div>
+      </div>
+
       <!-- 速报 -->
       <div class="briefing-panel">
         <div class="panel-header">
@@ -681,6 +717,7 @@ const STRINGS = {
     statVisitTotal:'总访问', statVisitToday:'今日', statVisitWeek:'本周', statVisitMonth:'本月',
     connecting:'连接中…', connected:'实时连接', reconnecting:'重连中…',
     searchPlaceholder:'搜索新闻…', newBadge:'↑ 有新内容',
+    jokeTitle:'😂 今日笑话', jokeLoading:'正在生成…', jokeFail:'生成失败',
     digestTitle:'📋 资讯摘要', briefingTitle:'⚡ 每日要闻速报',
     trumpTitle:'🇺🇸 特朗普动向', trumpViewAll:'查看全部 →',
     refresh:'↻ 刷新', loadingDigest:'正在生成摘要…', loadingBriefing:'正在生成速报…',
@@ -706,6 +743,7 @@ const STRINGS = {
     statVisitTotal:'Total visits', statVisitToday:'Today', statVisitWeek:'This week', statVisitMonth:'This month',
     connecting:'Connecting…', connected:'Live', reconnecting:'Reconnecting…',
     searchPlaceholder:'Search news…', newBadge:'↑ New items',
+    jokeTitle:'😂 Joke of the Day', jokeLoading:'Generating…', jokeFail:'Failed to generate',
     digestTitle:'📋 News Digest', briefingTitle:'⚡ Daily Briefing',
     trumpTitle:'🇺🇸 Trump Watch', trumpViewAll:'View all →',
     refresh:'↻ Refresh', loadingDigest:'Generating digest…', loadingBriefing:'Generating briefing…',
@@ -1207,6 +1245,24 @@ async function loadBriefing() {
 }
 
 // ── Digest ────────────────────────────────────────────────────────────────
+async function loadJoke(refresh = false) {
+  const el = document.getElementById('jokeBody');
+  el.innerHTML = '<span class="panel-loading">' + t('jokeLoading') + '</span>';
+  try {
+    const url = '/api/joke' + (refresh ? '?refresh=true' : '');
+    const data = await fetch(url).then(r => r.json());
+    const jokes = Array.isArray(data.jokes) ? data.jokes : [];
+    if (!jokes.length) { el.textContent = t('jokeFail'); return; }
+    el.textContent = '';
+    jokes.forEach(j => {
+      const div = document.createElement('div');
+      div.className = 'joke-item';
+      div.textContent = j;
+      el.appendChild(div);
+    });
+  } catch(e) { el.textContent = t('jokeFail'); }
+}
+
 async function loadDigest() {
   const el = document.getElementById('digestText');
   el.textContent = t('loadingDigest');
@@ -1458,7 +1514,7 @@ function connectPyth() {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────
-connectWS(); loadBriefing(); loadDigest();
+connectWS(); loadBriefing(); loadDigest(); loadJoke();
 setInterval(updateStats, 60000);
 setInterval(loadBriefing, 30 * 60 * 1000);
 loadMarkets();

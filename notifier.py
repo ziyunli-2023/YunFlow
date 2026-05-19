@@ -481,6 +481,13 @@ class EmailNotifier:
             digest_batch.extend(items_for_cat[:quota])
         digest_summary = ai_processor.generate_digest_summary(digest_batch)
 
+        # ── Joke of the day ───────────────────────────────────────────────
+        jokes: list[str] = []
+        try:
+            jokes = ai_processor.generate_joke(digest_batch)
+        except Exception as e:
+            logger.warning("joke generation failed (skipping): %s", e)
+
         # ── HTML body ──────────────────────────────────────────────────────
         html_parts = ["""
 <html><body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;
@@ -509,6 +516,24 @@ class EmailNotifier:
               padding:16px 20px;margin-bottom:24px;'>
     <div style='font-size:12px;font-weight:600;color:#92400e;margin-bottom:10px;'>📋 今日资讯摘要</div>
     <ul style='margin:0;padding-left:20px;'>{bullets_html}</ul>
+  </div>
+""")
+
+        # ── 😂 Joke of the day ────────────────────────────────────────────
+        if jokes:
+            jokes_html = "".join(
+                f"<div style='padding:10px 0;font-size:14px;color:#374151;line-height:1.8;"
+                f"white-space:pre-wrap;border-bottom:1px solid #fcd34d;'>{_html.escape(j)}</div>"
+                if i < len(jokes) - 1 else
+                f"<div style='padding:10px 0;font-size:14px;color:#374151;line-height:1.8;"
+                f"white-space:pre-wrap;'>{_html.escape(j)}</div>"
+                for i, j in enumerate(jokes)
+            )
+            html_parts.append(f"""
+  <div style='background:#fffbeb;border:1px solid #fcd34d;border-left:4px solid #f59e0b;
+              border-radius:8px;padding:16px 20px;margin-bottom:24px;'>
+    <div style='font-size:12px;font-weight:600;color:#92400e;margin-bottom:8px;'>😂 今日笑话</div>
+    {jokes_html}
   </div>
 """)
 

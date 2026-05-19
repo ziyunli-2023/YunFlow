@@ -391,3 +391,65 @@ Return strictly as a JSON array, no extra text:
     except Exception as e:
         logger.error("generate_digest_summary failed: %s", e)
         return []
+
+
+def generate_joke(items: list[dict]) -> list[str]:
+    """
+    Generate 2 short witty jokes grounded in today's real news.
+    Returns a list of 2 joke strings, or [] on failure.
+    """
+    if not config.DEEPSEEK_API_KEY or not items:
+        return []
+
+    candidates = items[:30]
+    lines = []
+    for i, item in enumerate(candidates):
+        d = item.get("item") or item.get("data") or item
+        title = d.get("title_zh") or d.get("title") or ""
+        summary = (d.get("summary_zh") or d.get("summary") or "")[:100]
+        text = d.get("text", "")
+        if text:
+            lines.append(f"{i+1}. {text[:150]}")
+        elif summary:
+            lines.append(f"{i+1}. {title} — {summary}")
+        else:
+            lines.append(f"{i+1}. {title}")
+    news_list = "\n".join(lines)
+
+    prompt = f"""你是一位毒舌财经脱口秀编剧，擅长把今天真实发生的新闻事件改编成对话体幽默段子。
+
+今天的新闻（只能从这里取材，不能编造）：
+{news_list}
+
+要求：
+- 严格基于上面的真实新闻，不能捏造不存在的事件
+- 写两条不同的段子，取材自不同的新闻事件
+- 形式不限：对话、冷笑话、神转折、讽刺评论均可
+- 语言要辛辣、有反转、让人会心一笑
+- 每条不超过70个汉字
+- 两条段子之间用 "---" 分隔
+- 只输出段子本身，不要任何编号、标题或解释
+
+直接输出两条段子："""
+
+    try:
+        resp = _get_client().chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=400,
+            temperature=0.9,
+        )
+        raw = resp.choices[0].message.content.strip()
+        jokes = [j.strip() for j in raw.split("---") if j.strip()]
+        # Strip any leading label the model might add
+        cleaned = []
+        for joke in jokes[:2]:
+            for prefix in ["段子：", "笑话：", "今日笑话：", "："]:
+                if joke.startswith(prefix):
+                    joke = joke[len(prefix):].strip()
+            if joke:
+                cleaned.append(joke)
+        return cleaned
+    except Exception as e:
+        logger.error("generate_joke failed: %s", e)
+        return []
