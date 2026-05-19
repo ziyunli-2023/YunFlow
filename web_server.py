@@ -1246,7 +1246,15 @@ async function loadBriefing() {
 // ── Digest ────────────────────────────────────────────────────────────────
 let _jokePool = [];
 let _jokeIdx = 0;
-const _JOKE_EXHAUSTED = '新闻太无聊，没段子了，别刷了 🙃';
+const _JOKE_EXHAUSTED = [
+  '没了，就这些，满意了吗。',
+  '这些段子我绞尽脑汁想出来的，就这么不够看？',
+  '今天新闻就这么无聊，又不是我的错。',
+  '我的才华不是用来喂刷新键的。',
+  '行了，我罢工了，30分钟后再说。',
+  '……',
+];
+let _jokeExhaustedIdx = 0;
 
 function _renderJoke(jokes) {
   const el = document.getElementById('jokeBody');
@@ -1265,7 +1273,8 @@ async function loadJoke(refresh = false) {
     // Cycle locally — no API call
     _jokeIdx++;
     if (_jokeIdx >= _jokePool.length) {
-      el.textContent = _JOKE_EXHAUSTED;
+      el.textContent = _JOKE_EXHAUSTED[Math.min(_jokeExhaustedIdx, _JOKE_EXHAUSTED.length - 1)];
+      _jokeExhaustedIdx++;
       return;
     }
     _renderJoke([_jokePool[_jokeIdx]]);
