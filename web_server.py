@@ -26,8 +26,8 @@ _briefing_cache: dict = {}   # keyed by lang
 _briefing_cache_at: dict = {}
 _digest_cache: dict = {}     # keyed by lang
 _digest_cache_at: dict = {}
-_joke_cache: dict = {}   # keyed by lang
-_joke_cache_at: dict = {}
+_joke_cache: list = []
+_joke_cache_at: float = 0
 
 # ── WebSocket connection manager ───────────────────────────────────────────
 class ConnectionManager:
@@ -276,22 +276,22 @@ def digest_summary(lang: str = "zh"):
 
 
 @app.get("/api/joke")
-def get_joke(lang: str = "zh"):
-    """Return cached joke pool (up to 10) per language; regenerate every 30 min."""
+def get_joke():
+    """Return cached joke pool (up to 10); regenerate every 30 min."""
     global _joke_cache, _joke_cache_at
-    if _joke_cache.get(lang) and time.time() - _joke_cache_at.get(lang, 0) < _CACHE_TTL:
-        return {"jokes": _joke_cache[lang]}
+    if _joke_cache and time.time() - _joke_cache_at < _CACHE_TTL:
+        return {"jokes": _joke_cache}
     import ai_processor
     posts_by_cat = storage.get_recent_posts_by_category(hours=24, limit_per_category=10)
     all_posts = []
     for posts in posts_by_cat.values():
         all_posts.extend(posts[:5])
     items = [{"type": "post", "data": p} for p in all_posts]
-    result = ai_processor.generate_joke(items, lang=lang)
+    result = ai_processor.generate_joke(items)
     if result:
-        _joke_cache[lang] = result
-        _joke_cache_at[lang] = time.time()
-    return {"jokes": _joke_cache.get(lang, [])}
+        _joke_cache = result
+        _joke_cache_at = time.time()
+    return {"jokes": _joke_cache}
 
 
 @app.get("/api/briefing")
@@ -775,7 +775,6 @@ function setLang(l) {
   }
   loadBriefing();
   loadDigest();
-  _jokePool = []; loadJoke();
 }
 function applyLang() {
   const label = lang === 'zh' ? 'EN' : '中';
@@ -1247,24 +1246,14 @@ async function loadBriefing() {
 // ── Digest ────────────────────────────────────────────────────────────────
 let _jokePool = [];
 let _jokeIdx = 0;
-const _JOKE_EXHAUSTED = {
-  zh: [
-    '没了，就这些，满意了吗。',
-    '这些段子我绞尽脑汁想出来的，就这么不够看？',
-    '今天新闻就这么无聊，又不是我的错。',
-    '我的才华不是用来喂刷新键的。',
-    '行了，我罢工了，30分钟后再说。',
-    '……',
-  ],
-  en: [
-    'That\'s all. Happy now?',
-    'I poured my soul into these jokes and this is how you treat me.',
-    'The news is boring today. Not my fault.',
-    'My talent was not meant to feed a refresh button.',
-    'I\'m on strike. Check back in 30 minutes.',
-    '……',
-  ],
-};
+const _JOKE_EXHAUSTED = [
+  '没了，就这些，满意了吗。',
+  '这些段子我绞尽脑汁想出来的，就这么不够看？',
+  '今天新闻就这么无聊，又不是我的错。',
+  '我的才华不是用来喂刷新键的。',
+  '行了，我罢工了，30分钟后再说。',
+  '……',
+];
 let _jokeExhaustedIdx = 0;
 
 function _renderJoke(jokes) {
@@ -1283,23 +1272,22 @@ async function loadJoke(refresh = false) {
   if (refresh && _jokePool.length > 0) {
     // Cycle locally — no API call
     _jokeIdx++;
-    const pool = _JOKE_EXHAUSTED[lang] || _JOKE_EXHAUSTED.zh;
     if (_jokeIdx >= _jokePool.length) {
-      el.textContent = pool[Math.min(_jokeExhaustedIdx, pool.length - 1)];
+      el.textContent = _JOKE_EXHAUSTED[Math.min(_jokeExhaustedIdx, _JOKE_EXHAUSTED.length - 1)];
       _jokeExhaustedIdx++;
       return;
     }
     _renderJoke([_jokePool[_jokeIdx]]);
     return;
   }
-  // Initial load or language switch: fetch from API
+  // Initial load: fetch from API
   el.innerHTML = '<span class="panel-loading">' + t('jokeLoading') + '</span>';
   try {
-    const data = await fetch('/api/joke?lang=' + lang).then(r => r.json());
+    const data = await fetch('/api/joke').then(r => r.json());
     _jokePool = Array.isArray(data.jokes) ? data.jokes : [];
     _jokeIdx = 0;
     _jokeExhaustedIdx = 0;
-    if (!_jokePool.length) { el.textContent = lang === 'zh' ? '今日新闻太无聊，段子写不出来。' : 'News too dull today — no jokes made it.'; return; }
+    if (!_jokePool.length) { el.textContent = '今日新闻太无聊，段子写不出来。'; return; }
     _renderJoke([_jokePool[0]]);
   } catch(e) { el.textContent = t('jokeFail'); }
 }

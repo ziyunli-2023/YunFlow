@@ -393,7 +393,7 @@ Return strictly as a JSON array, no extra text:
         return []
 
 
-def generate_joke(items: list[dict], lang: str = "zh") -> list[str]:
+def generate_joke(items: list[dict]) -> list[str]:
     """
     Generate up to 10 jokes grounded in today's real news (score >= 4 kept).
     Returns a list of joke strings (pool for frontend cycling), or [] on failure.
@@ -405,12 +405,8 @@ def generate_joke(items: list[dict], lang: str = "zh") -> list[str]:
     lines = []
     for i, item in enumerate(candidates):
         d = item.get("item") or item.get("data") or item
-        if lang == "en":
-            title = d.get("title") or d.get("title_zh") or ""
-            summary = (d.get("summary") or d.get("summary_zh") or "")[:100]
-        else:
-            title = d.get("title_zh") or d.get("title") or ""
-            summary = (d.get("summary_zh") or d.get("summary") or "")[:100]
+        title = d.get("title_zh") or d.get("title") or ""
+        summary = (d.get("summary_zh") or d.get("summary") or "")[:100]
         text = d.get("text", "")
         if text:
             lines.append(f"{i+1}. {text[:150]}")
@@ -420,23 +416,7 @@ def generate_joke(items: list[dict], lang: str = "zh") -> list[str]:
             lines.append(f"{i+1}. {title}")
     news_list = "\n".join(lines)
 
-    if lang == "en":
-        prompt = f"""You are a sharp-tongued financial comedy writer who turns real news into witty jokes.
-
-Today's news (use only these facts, no fabrication):
-{news_list}
-
-Task: Write up to 10 jokes, each based on a different news item.
-- Any format: dialogue, one-liner, dark irony, satirical observation
-- Sharp, punchy, with a twist — make people smirk
-- Max 60 words each
-- Honestly score each joke 1–5; only give high scores if it's genuinely funny
-- If a joke isn't landing, score it low — don't pad the count
-
-Return strictly as a JSON array, no extra text:
-[{{"joke": "joke text", "score": 4}}, ...]"""
-    else:
-        prompt = f"""你是一位毒舌财经脱口秀编剧，擅长把今天真实发生的新闻事件改编成幽默段子。
+    prompt = f"""你是一位毒舌财经脱口秀编剧，擅长把今天真实发生的新闻事件改编成幽默段子。
 
 今天的新闻（只能从这里取材，不能编造）：
 {news_list}
