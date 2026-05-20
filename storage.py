@@ -116,6 +116,7 @@ def init_db():
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 visited_at TEXT NOT NULL,
                 date       TEXT NOT NULL,
+                week       TEXT,
                 month      TEXT NOT NULL
             )
         """)

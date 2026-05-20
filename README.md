@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://yunflow.net">
-    <img src="docs/demo.gif" alt="YunFlow dashboard demo" width="800">
+    <img src="docs/desktop.gif" alt="YunFlow desktop browser demo" width="920">
   </a>
 </p>
 
@@ -16,13 +16,50 @@
 
 YunFlow collects updates from leading AI researchers, labs, founders, technical blogs, finance feeds, and prediction markets across X (Twitter) and RSS, stores everything in SQLite, and serves the results through a bilingual web dashboard. It also generates AI-curated digests, daily briefings, and snarky financial jokes via DeepSeek, sends email digests on a 4-slot schedule, and exposes the dataset through an MCP server for coding agents.
 
+## Product Preview
+
+<p align="center">
+  <strong>Desktop browser view</strong><br>
+  <sub>Read the YunFlow news website with live markets, curated briefings, source filters, category navigation, and searchable mixed feeds.</sub>
+</p>
+
+<p align="center">
+  <a href="https://yunflow.net">
+    <img src="docs/desktop.png" alt="YunFlow desktop browser screenshot" width="960">
+  </a>
+</p>
+
+<br>
+
+<table>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/mobile-news.png" alt="YunFlow mobile news feed screenshot" width="220">
+      <br>
+      <sub><strong>Mobile news feed</strong><br>Scan-friendly updates in a phone browser.</sub>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <a href="https://yunflow.net">
+        <img src="docs/mobile.gif" alt="YunFlow mobile dashboard interaction demo" width="220">
+      </a>
+      <br>
+      <sub><strong>Mobile browser tour</strong><br>Navigation, filtering, and reading flow in motion.</sub>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/mobile-briefing.png" alt="YunFlow mobile briefing screenshot" width="220">
+      <br>
+      <sub><strong>Finance briefing</strong><br>Deeper market context across earnings, IPOs, macro events, and catalysts.</sub>
+    </td>
+  </tr>
+</table>
+
 **Features:**
 - 🌐 **Live website** — [yunflow.net](https://yunflow.net) — try it before installing
 - **X & RSS Monitors** — 8 AI figures (Karpathy, Sam Altman, etc.) + 25+ feeds (OpenAI, Anthropic, DeepMind, arXiv, finance, geopolitics)
 - **Web Dashboard** — Bilingual (zh/en), live market ticker, category filters, full-text search
   - 📋 **News Digest** — AI-curated pool of 30 highlights across 6 domains; refresh cycles next batch of 6 (regenerated every 30 min)
   - 😂 **Joke Panel** — DeepSeek-generated punchlines grounded in today's real news, score-ranked best-first
-  - ⚡ **Daily Briefing** — Per-category bullet summary covering US stocks / geopolitics / VC / AI / Web3 / prediction markets
+  - ⚡ **Daily Briefing** — In-depth finance briefing with 财报/earnings context, IPO calendar signals, macro events, US stocks, and market-moving catalysts
   - 📅 **Earnings Calendar** — Finnhub-powered earnings + IPO + macro events, with mini-cards linking to related news
   - 🔍 **Smart Search** — Auto-hides context panels, ESC to exit, restores your prior view on clear
 - **Email Digest** — 4-slot Gmail schedule (06:00 早报 / 12:00 午报 / 18:00 晚报 / 22:00 夜报) with importance-ranked summary, top jokes, calendar preview, and per-category briefing
