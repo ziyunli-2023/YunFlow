@@ -255,9 +255,9 @@ def digest_summary(lang: str = "zh"):
         return {"summary": _digest_cache[lang]}
     import ai_processor
     # Each category contributes a fixed quota so the digest stays balanced
-    posts_by_cat = storage.get_recent_posts_by_category(hours=24, limit_per_category=15)
-    CAT_QUOTA = {"us_stock": 8, "trump": 7, "geopolitics": 7, "venture": 6,
-                 "polymarket": 5, "ai": 5, "papers": 3, "web3": 3}
+    posts_by_cat = storage.get_recent_posts_by_category(hours=24, limit_per_category=25)
+    CAT_QUOTA = {"us_stock": 12, "trump": 10, "geopolitics": 10, "venture": 8,
+                 "polymarket": 7, "ai": 8, "papers": 5, "web3": 5}
     def _quality(p):
         return (int(p.get("hn_score") or 0)
                 + int(p.get("hf_upvotes") or 0) * 2
@@ -653,38 +653,40 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
 
     <div class="feed" id="feed">
-      <!-- AI 摘要 -->
-      <div class="digest-panel">
-        <div class="panel-header">
-          <div class="panel-title" data-i18n="digestTitle">📋 资讯摘要</div>
-          <div class="panel-actions">
-            <button class="refresh-btn" data-i18n="refresh" onclick="loadDigest()">↻ 刷新</button>
+      <div id="contextPanels">
+        <!-- AI 摘要 -->
+        <div class="digest-panel">
+          <div class="panel-header">
+            <div class="panel-title" data-i18n="digestTitle">📋 资讯摘要</div>
+            <div class="panel-actions">
+              <button class="refresh-btn" data-i18n="refresh" onclick="loadDigest(true)">↻ 刷新</button>
+            </div>
           </div>
+          <div class="digest-text" id="digestText"><span class="panel-loading" data-i18n="loadingDigest">正在生成摘要…</span></div>
         </div>
-        <div class="digest-text" id="digestText"><span class="panel-loading" data-i18n="loadingDigest">正在生成摘要…</span></div>
-      </div>
 
-      <!-- 今日笑话 -->
-      <div class="joke-panel">
-        <div class="panel-header">
-          <div class="panel-title" data-i18n="jokeTitle">😂 今日笑话</div>
-          <div class="panel-actions">
-            <button class="refresh-btn" onclick="loadJoke(true)">↻ 刷新</button>
+        <!-- 今日笑话 -->
+        <div class="joke-panel">
+          <div class="panel-header">
+            <div class="panel-title" data-i18n="jokeTitle">😂 今日笑话</div>
+            <div class="panel-actions">
+              <button class="refresh-btn" onclick="loadJoke(true)">↻ 刷新</button>
+            </div>
           </div>
+          <div id="jokeBody"><span class="panel-loading">正在生成…</span></div>
         </div>
-        <div id="jokeBody"><span class="panel-loading">正在生成…</span></div>
-      </div>
 
-      <!-- 速报 -->
-      <div class="briefing-panel">
-        <div class="panel-header">
-          <div class="panel-title" data-i18n="briefingTitle">⚡ 每日要闻速报</div>
-          <div class="panel-actions">
-            <span class="panel-meta" id="briefingMeta"></span>
-            <button class="refresh-btn" data-i18n="refresh" onclick="loadBriefing()">↻ 刷新</button>
+        <!-- 速报 -->
+        <div class="briefing-panel">
+          <div class="panel-header">
+            <div class="panel-title" data-i18n="briefingTitle">⚡ 每日要闻速报</div>
+            <div class="panel-actions">
+              <span class="panel-meta" id="briefingMeta"></span>
+              <button class="refresh-btn" data-i18n="refresh" onclick="loadBriefing()">↻ 刷新</button>
+            </div>
           </div>
+          <div id="briefingBody"><span class="panel-loading" data-i18n="loadingBriefing">正在生成速报…</span></div>
         </div>
-        <div id="briefingBody"><span class="panel-loading" data-i18n="loadingBriefing">正在生成速报…</span></div>
       </div>
 
       <div id="cardFeed"><div class="loading-text" data-i18n="loading">加载中…</div></div>
@@ -726,6 +728,13 @@ const STRINGS = {
     noContent:'暂无内容，监控器正在抓取…', noCategory:'该分类暂无内容',
     loadFail:'加载失败', loadingPapers:'⏳ 正在加载论文…', loadingPolymarket:'⏳ 正在加载预测市场…', loading:'加载中…',
     noDigest:'暂无摘要', searchEmpty: q => '未找到 "' + q + '"',
+    digestExhausted:[
+      '今天就这么多看点了。',
+      '精华都给你了，剩下都是噪音。',
+      '刷新键摁累了你，30分钟后再来。',
+      '我罢工了，30分钟后再说。',
+      '……',
+    ],
     noPodcasts:'暂无跟踪的播客', podWebsite:'🌐 官网', podAlerts:'🔔 即时通知',
     recentEps:'最近更新', noEps:'暂无记录，等待下次抓取…',
     featured:'精选', polymarketTag:'🎯 预测市场', bnavPolymarket:'预测',
@@ -752,6 +761,13 @@ const STRINGS = {
     noContent:'No content yet, fetching…', noCategory:'No items in this category',
     loadFail:'Load failed', loadingPapers:'⏳ Loading papers…', loadingPolymarket:'⏳ Loading prediction markets…', loading:'Loading…',
     noDigest:'No digest available', searchEmpty: q => 'No results for "' + q + '"',
+    digestExhausted:[
+      "That's all today has to offer.",
+      'Gave you the cream of the crop already.',
+      'Save your refresh finger — come back in 30 min.',
+      "I'm on strike. Try again in 30 minutes.",
+      '...',
+    ],
     noPodcasts:'No podcasts tracked', podWebsite:'🌐 Website', podAlerts:'🔔 Alerts',
     recentEps:'Recent Episodes', noEps:'No episodes yet…',
     featured:'Featured', polymarketTag:'🎯 Prediction', bnavPolymarket:'Predict',
@@ -1064,9 +1080,7 @@ function filterItems(items) {
   return items;
 }
 function showPanels(show) {
-  document.querySelector('.briefing-panel').style.display = show ? '' : 'none';
-  document.querySelector('.digest-panel').style.display = show ? '' : 'none';
-
+  document.getElementById('contextPanels').style.display = show ? '' : 'none';
 }
 function setCategoryMobile(cat, el) {
   showPanels(false);
@@ -1292,40 +1306,84 @@ async function loadJoke(refresh = false) {
   } catch(e) { el.textContent = t('jokeFail'); }
 }
 
-async function loadDigest() {
+let _digestPool = [];
+let _digestIdx = 0;
+let _digestExhaustedIdx = 0;
+const _DIGEST_BATCH = 6;
+
+function _renderDigest(bullets) {
   const el = document.getElementById('digestText');
+  el.textContent = '';
+  const ul = document.createElement('ul');
+  ul.style.margin = '0'; ul.style.paddingLeft = '20px';
+  bullets.forEach(b => {
+    const li = document.createElement('li');
+    li.style.margin = '6px 0'; li.style.lineHeight = '1.6';
+    const text = (typeof b === 'object') ? (b.text || '') : b;
+    const url  = (typeof b === 'object') ? (b.url  || '') : '';
+    if (url) {
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener';
+      a.textContent = text;
+      li.appendChild(a);
+    } else {
+      li.textContent = text;
+    }
+    ul.appendChild(li);
+  });
+  el.appendChild(ul);
+}
+
+async function loadDigest(refresh = false) {
+  const el = document.getElementById('digestText');
+  if (refresh && _digestPool.length > 0) {
+    // Cycle locally — no API call
+    const next = _digestIdx + _DIGEST_BATCH;
+    if (next >= _digestPool.length) {
+      const msgs = STRINGS[lang].digestExhausted;
+      el.textContent = msgs[Math.min(_digestExhaustedIdx, msgs.length - 1)];
+      _digestExhaustedIdx++;
+      return;
+    }
+    _digestIdx = next;
+    _renderDigest(_digestPool.slice(_digestIdx, _digestIdx + _DIGEST_BATCH));
+    return;
+  }
+  // Initial load (or language switch): fetch fresh pool
   el.textContent = t('loadingDigest');
   try {
     const data = await fetch('/api/digest-summary?lang=' + lang).then(r => r.json());
-    const bullets = Array.isArray(data.summary) ? data.summary : [];
-    if (!bullets.length) { el.textContent = t('noDigest'); return; }
-    el.textContent = '';
-    const ul = document.createElement('ul');
-    ul.style.margin = '0'; ul.style.paddingLeft = '20px';
-    bullets.forEach(b => {
-      const li = document.createElement('li');
-      li.style.margin = '6px 0'; li.style.lineHeight = '1.6';
-      const text = (typeof b === 'object') ? (b.text||'') : b;
-      const url  = (typeof b === 'object') ? (b.url||'')  : '';
-      if (url) {
-        const a = document.createElement('a');
-        a.href = url; a.target = '_blank'; a.rel = 'noopener';
-        a.textContent = text;
-        li.appendChild(a);
-      } else {
-        li.textContent = text;
-      }
-      ul.appendChild(li);
-    });
-    el.appendChild(ul);
+    _digestPool = Array.isArray(data.summary) ? data.summary : [];
+    for (let i = _digestPool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [_digestPool[i], _digestPool[j]] = [_digestPool[j], _digestPool[i]];
+    }
+    _digestIdx = 0;
+    _digestExhaustedIdx = 0;
+    if (!_digestPool.length) { el.textContent = t('noDigest'); return; }
+    _renderDigest(_digestPool.slice(0, _DIGEST_BATCH));
   } catch(e) { el.textContent = t('digestFail'); }
 }
 
 // ── Search ────────────────────────────────────────────────────────────────
 let searchTimer;
+let _searchActive = false;
+function restoreView() {
+  _searchActive = false;
+  if (currentFilter === 'podcasts') {
+    showPodcasts(document.querySelector('.nav-btn.active'));
+  } else if (currentFilter.startsWith('category:')) {
+    setCategory(currentFilter.slice(9), document.querySelector('.nav-btn.active'));
+  } else {
+    showPanels(currentFilter === 'all');
+    renderFeed();
+  }
+}
 async function onSearch(q) {
   clearTimeout(searchTimer);
-  if (!q.trim()) { renderFeed(); return; }
+  if (!q.trim()) { restoreView(); return; }
+  _searchActive = true;
+  showPanels(false);
   searchTimer = setTimeout(async () => {
     const results = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=30`).then(r=>r.json());
     const feed = document.getElementById('cardFeed');
@@ -1343,6 +1401,14 @@ async function onSearch(q) {
     });
   }, 300);
 }
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && _searchActive) {
+    const input = document.getElementById('searchInput');
+    input.value = '';
+    restoreView();
+    input.blur();
+  }
+});
 
 // ── Podcasts ──────────────────────────────────────────────────────────────
 function makeEmptyEl(icon, msg) {

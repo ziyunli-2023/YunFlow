@@ -291,16 +291,22 @@ Requirements:
         return {"sections": []}
 
 
-def generate_digest_summary(items: list[dict], lang: str = "zh") -> list[str]:
+def generate_digest_summary(items: list[dict], lang: str = "zh",
+                            top_n: int | None = None) -> list[str]:
     """
     Generate a bullet-point digest of a batch of news items.
     Input: list of {"type": "post"|"tweet", "item"|"data": {...}} dicts.
     Returns: list of short bullets (3-6 points), or [] on failure.
+
+    If `top_n` is set, the prompt instructs AI to pick exactly the top-N most
+    important items ordered by importance — used for the email digest which
+    needs a tight, ranked list. Otherwise the default broad-coverage prompt
+    (up to 30 highlights, ~5 per domain) is used for the web pool.
     """
     if not config.DEEPSEEK_API_KEY or not items:
         return []
 
-    candidates = items[:40]
+    candidates = items[:60]
     url_index: dict[int, str] = {}
     lines = []
     for i, item in enumerate(candidates):
@@ -329,37 +335,76 @@ def generate_digest_summary(items: list[dict], lang: str = "zh") -> list[str]:
                 lines.append(f"{i+1}. [{d.get('source','')}]{sig_str} {title}")
     news_list = "\n".join(lines)
 
-    if lang == "en":
-        prompt = f"""You are a sharp analyst selecting the most valuable news items from today's feed.
+    if top_n:
+        if lang == "en":
+            prompt = f"""You are a sharp analyst selecting THE most important news items from this period.
 
 News list (numbered):
 {news_list}
 
-Select 6-10 highlights, covering domains in this priority order (skip only if no relevant item exists):
-① US stocks/macro ② Geopolitics ③ VC/startup ④ Prediction markets ⑤ AI ⑥ Web3
+Task: pick exactly the {top_n} MOST IMPORTANT highlights from this period, ordered by importance (most important first).
 
 Rules:
-- One highlight per domain where possible
-- Prioritize: specific data/numbers, surprising findings, concrete decisions or releases
-- Avoid: generic trend summaries, vague predictions, pure opinion pieces
+- Importance criteria: market-moving events, major decisions/releases, surprising findings with concrete numbers, geopolitical shifts
+- Try to span domains (US stocks/macro, Geopolitics, VC/startup, Prediction markets, AI, Web3) but importance trumps coverage — if all top stories are in one domain, that's fine
+- Avoid: generic trend summaries, vague predictions, pure opinion, routine updates
 - Each point under 25 words — lead with the key fact, not the source name
+- No duplicate items: each `src` index appears at most once
 
-Return strictly as a JSON array, no extra text:
-[{{"text": "highlight1", "src": 2}}, {{"text": "highlight2", "src": 5}}]"""
-    else:
-        prompt = f"""你是一位信息密度极高的资讯分析师，从今天的资讯中为每个领域挑出最值得关注的看点。
+Return strictly as a JSON array of {top_n} items, ordered by importance, no extra text:
+[{{"text": "most important", "src": 2}}, {{"text": "second most important", "src": 5}}]"""
+        else:
+            prompt = f"""你是一位信息密度极高的资讯分析师，从这段时间的资讯中挑出最重要的看点。
 
 资讯列表（已编号）：
 {news_list}
 
-选出 6~10 条看点，按以下优先级顺序覆盖各领域（该领域无相关资讯时可跳过）：
+任务：精挑细选出本时段**最重要的 {top_n} 条**看点，按重要性从高到低排序。
+
+要求：
+- 重要性标准：市场震动事件、重大决定/发布、有具体数字的意外发现、地缘格局变化
+- 尽量覆盖各领域（美股/宏观、地缘政治、风投/创业、预测市场、AI、Web3），但重要性优先——如果最重要的几条都集中在某个领域，也可以
+- 避免：泛泛趋势总结、模糊预言、纯观点文章、常规更新
+- 每条 30 字以内，直接说核心事实，不要说"某来源报道了XX"
+- 不要重复：同一个 src 序号最多出现一次
+
+严格按以下 JSON 数组格式返回 {top_n} 条，按重要性从高到低排序，不要任何额外文字：
+[{{"text": "最重要", "src": 2}}, {{"text": "次重要", "src": 5}}]"""
+    elif lang == "en":
+        prompt = f"""You are a sharp analyst selecting THE most important news items from today's feed.
+
+News list (numbered):
+{news_list}
+
+Select up to 30 of the MOST IMPORTANT highlights, with broad coverage across these domains:
+① US stocks/macro ② Geopolitics ③ VC/startup ④ Prediction markets ⑤ AI ⑥ Web3
+
+Rules:
+- Aim for ~5 highlights per domain (fewer if not enough genuinely important material — don't pad with filler)
+- Within each domain, pick the most important items first; importance criteria: market-moving events, major decisions/releases, surprising findings with concrete numbers, geopolitical shifts
+- Avoid: generic trend summaries, vague predictions, pure opinion, routine updates
+- Each point under 25 words — lead with the key fact, not the source name
+- No duplicate items: each `src` index appears at most once
+- Return ordered by importance from highest to lowest
+
+Return strictly as a JSON array, no extra text:
+[{{"text": "highlight1", "src": 2}}, {{"text": "highlight2", "src": 5}}]"""
+    else:
+        prompt = f"""你是一位信息密度极高的资讯分析师，从今天的资讯中挑出**最重要**的看点。
+
+资讯列表（已编号）：
+{news_list}
+
+选出最多 30 条**最重要**的看点，覆盖以下各领域：
 ① 美股/宏观 ② 地缘政治 ③ 风投/创业 ④ 预测市场 ⑤ AI ⑥ Web3
 
 要求：
-- 每个领域尽量各出一条
-- 优先选：有具体数据/数字的、令人意外的、有实质进展的内容
-- 避免：泛泛趋势总结、模糊预言、纯观点文章
+- 每个领域尽量出 5 条左右（素材不够重要时可少出，不要强行凑数）
+- 每个领域内部按重要性从高到低挑选；重要性标准：市场震动事件、重大决定/发布、有具体数字的意外发现、地缘格局变化
+- 避免：泛泛趋势总结、模糊预言、纯观点文章、常规更新
 - 每条 30 字以内，直接说核心事实，不要说"某来源报道了XX"
+- 不要重复：同一个 src 序号最多出现一次
+- 返回顺序按重要性从高到低
 
 严格按以下 JSON 数组格式返回，不要任何额外文字：
 [{{"text": "看点1", "src": 2}}, {{"text": "看点2", "src": 5}}]"""
@@ -368,7 +413,7 @@ Return strictly as a JSON array, no extra text:
         resp = _get_client().chat.completions.create(
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=1000,
+            max_tokens=3000,
             temperature=0.5,
         )
         raw = resp.choices[0].message.content.strip()
@@ -378,15 +423,22 @@ Return strictly as a JSON array, no extra text:
             raise ValueError("No JSON array in response")
         parsed = json.loads(raw[start:end + 1])
         result = []
+        seen_src = set()
         for b in parsed:
             if isinstance(b, dict):
                 text = str(b.get("text", "")).strip()
-                url = url_index.get(int(b.get("src") or 0), "") or ""
+                src = int(b.get("src") or 0)
+                url = url_index.get(src, "") or ""
             else:
                 text = str(b).strip()
+                src = 0
                 url = ""
-            if text:
-                result.append({"text": text, "url": url})
+            if not text:
+                continue
+            if src and src in seen_src:
+                continue
+            seen_src.add(src)
+            result.append({"text": text, "url": url})
         return result
     except Exception as e:
         logger.error("generate_digest_summary failed: %s", e)
@@ -395,8 +447,9 @@ Return strictly as a JSON array, no extra text:
 
 def generate_joke(items: list[dict]) -> list[str]:
     """
-    Generate up to 10 jokes grounded in today's real news (score >= 4 kept).
-    Returns a list of joke strings (pool for frontend cycling), or [] on failure.
+    Generate up to 10 jokes grounded in today's real news, sorted best-first
+    by the model's self-score. Returns a list of joke strings (pool for
+    frontend cycling and email top-N), or [] on failure.
     """
     if not config.DEEPSEEK_API_KEY or not items:
         return []
@@ -443,13 +496,17 @@ def generate_joke(items: list[dict]) -> list[str]:
         if start == -1 or end == -1:
             raise ValueError("No JSON array")
         parsed = json.loads(raw[start:end + 1])
-        cleaned = []
+        scored = []
         for item in parsed[:10]:
             joke = str(item.get("joke", "")).strip()
-            score = int(item.get("score", 0))
-            if joke and score >= 4:
-                cleaned.append(joke)
-        return cleaned
+            try:
+                score = int(item.get("score", 0))
+            except (TypeError, ValueError):
+                score = 0
+            if joke:
+                scored.append((score, joke))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [j for _, j in scored]
     except Exception as e:
         logger.error("generate_joke failed: %s", e)
         return []

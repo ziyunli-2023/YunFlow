@@ -1,4 +1,4 @@
-"""Email notifier — sends digest at 07:00, 12:00 and 20:00 daily."""
+"""Email notifier — sends digest at 06:00, 12:00, 18:00 and 22:00 daily."""
 
 import html as _html
 import logging
@@ -17,9 +17,9 @@ import subscribers
 logger = logging.getLogger(__name__)
 
 # Send digest at these hours (local time) → window covers since previous send
-SEND_HOURS = {7, 12, 20}
-SEND_WINDOWS = {7: 11, 12: 5, 20: 8}   # hour → look-back hours
-SEND_LABELS  = {7: "早报", 12: "午报", 20: "晚报"}
+SEND_HOURS = {6, 12, 18, 22}
+SEND_WINDOWS = {6: 8, 12: 6, 18: 6, 22: 4}   # hour → look-back hours
+SEND_LABELS  = {6: "早报", 12: "午报", 18: "晚报", 22: "夜报"}
 
 # Earnings calendar block — included in 07:00 (today) and 20:00 (tomorrow's preview)
 _HOUR_LABEL_ZH = {"bmo": "盘前", "amc": "盘后", "dmh": "盘中"}
@@ -284,11 +284,11 @@ class EmailNotifier:
             if q["item"].get("id") not in existing_ids:
                 batch.append(q)
 
-        # Earnings calendar: 07:00 → today, 20:00 → tomorrow's preview
+        # Earnings calendar: 06:00 → today, 22:00 → tomorrow's preview
         calendar_html = ""
-        if slot_hour == 7:
+        if slot_hour == 6:
             calendar_html = _build_calendar_html(slot_time.date(), "今日")
-        elif slot_hour == 20:
+        elif slot_hour == 22:
             calendar_html = _build_calendar_html(slot_time.date() + timedelta(days=1), "明日")
 
         if batch or calendar_html:
@@ -479,7 +479,7 @@ class EmailNotifier:
         for cat, quota in _digest_quota.items():
             items_for_cat = sorted(_posts_by_cat.get(cat, []), key=_q, reverse=True)
             digest_batch.extend(items_for_cat[:quota])
-        digest_summary = ai_processor.generate_digest_summary(digest_batch)
+        digest_summary = ai_processor.generate_digest_summary(digest_batch, top_n=6)
 
         # ── Joke of the day ───────────────────────────────────────────────
         jokes: list[str] = []
