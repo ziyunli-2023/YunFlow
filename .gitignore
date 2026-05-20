@@ -16,6 +16,9 @@ nohup.out
 # Local temp files
 tmp/
 
+# Setup/ops scripts — machine-specific, not for the public repo
+scripts/
+
 # Python
 __pycache__/
 *.pyc
