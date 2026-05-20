@@ -1,15 +1,19 @@
-# YunFlow - Your AI News Monitor
+# YunFlow — Your AI & Markets News Monitor
 
-> Track AI news from X and RSS in one lightweight, self-hosted monitor.
+> Self-hosted dashboard that streams AI, markets, geopolitics, and prediction-market news from X and RSS into one place. Live at **[yunflow.net](https://yunflow.net)**.
 
-AI News Monitor collects updates from leading AI researchers, labs, founders, and technical blogs across X (Twitter) and RSS feeds, stores everything in SQLite, and serves the results through a local web dashboard. It can also send email digests, translate content into Chinese with DeepSeek, and expose the dataset through an MCP server for coding agents and local tooling.
+YunFlow collects updates from leading AI researchers, labs, founders, technical blogs, finance feeds, and prediction markets across X (Twitter) and RSS, stores everything in SQLite, and serves the results through a bilingual web dashboard. It also generates AI-curated digests, daily briefings, and snarky financial jokes via DeepSeek, sends email digests on a 4-slot schedule, and exposes the dataset through an MCP server for coding agents.
 
 **Features:**
-- **X Monitor** — Track 8 key AI figures (Karpathy, Sam Altman, etc.) · Free tier
-- **RSS Monitor** — OpenAI, Anthropic, DeepMind, arXiv and 22 more, tiered polling
+- **X & RSS Monitors** — 8 AI figures (Karpathy, Sam Altman, etc.) + 25+ feeds (OpenAI, Anthropic, DeepMind, arXiv, finance, geopolitics)
+- **Web Dashboard** — Bilingual (zh/en), live market ticker, category filters, full-text search
+  - 📋 **News Digest** — AI-curated pool of 30 highlights across 6 domains; refresh cycles next batch of 6 (regenerated every 30 min)
+  - 😂 **Joke Panel** — DeepSeek-generated punchlines grounded in today's real news, score-ranked best-first
+  - ⚡ **Daily Briefing** — Per-category bullet summary covering US stocks / geopolitics / VC / AI / Web3 / prediction markets
+  - 📅 **Earnings Calendar** — Finnhub-powered earnings + IPO + macro events, with mini-cards linking to related news
+  - 🔍 **Smart Search** — Auto-hides context panels, ESC to exit, restores your prior view on clear
+- **Email Digest** — 4-slot Gmail schedule (06:00 早报 / 12:00 午报 / 18:00 晚报 / 22:00 夜报) with importance-ranked summary, top jokes, calendar preview, and per-category briefing
 - **AI Translation** — DeepSeek API auto-translates English titles/summaries to Chinese *(optional)*
-- **Email Digest** — Gmail notifications when new content arrives *(optional)*
-- **Web Dashboard** — Browse all news at `http://localhost:8080`
 - **MCP Server** — Claude Code can query the database directly via MCP tools
 
 ---
@@ -44,8 +48,8 @@ USE_LETSENCRYPT=true DOMAIN=your-domain.com SSL_EMAIL=you@email.com ./scripts/se
 **1. Clone & install dependencies**
 
 ```bash
-git clone https://github.com/your-username/AI-News.git
-cd AI-News
+git clone https://github.com/ziyunli-2023/YunFlow.git
+cd YunFlow
 pip install -r requirements.txt uvicorn
 ```
 
@@ -163,20 +167,24 @@ If the output is empty, the process is not running. Restart it manually or via l
 ## Project Structure
 
 ```
-AI-News/
-├── main.py           # Entry point: Web dashboard + monitors + email
-├── mcp_server.py     # MCP server entry (for Claude Code)
-├── config.py         # Tracked accounts, RSS sources, polling intervals
-├── storage.py        # SQLite database operations
-├── rss_monitor.py    # RSS polling monitor
-├── nitter_monitor.py # X (Twitter) monitor
-├── x_monitor.py      # X API wrapper
-├── ai_processor.py   # DeepSeek translation
-├── notifier.py       # Email notifications
-├── web_server.py     # FastAPI web dashboard
-├── .env.example      # Environment variable template
-├── requirements.txt  # Python dependencies
-└── logs/             # Runtime logs (auto-created, not tracked in git)
+YunFlow/
+├── main.py              # Entry point: web dashboard + monitors + email
+├── mcp_server.py        # MCP server entry (for Claude Code)
+├── config.py            # Tracked accounts, RSS sources, polling intervals
+├── storage.py           # SQLite database operations
+├── rss_monitor.py       # RSS polling monitor
+├── nitter_monitor.py    # X (Twitter) monitor
+├── x_monitor.py         # X API wrapper
+├── ai_processor.py      # DeepSeek translation + digest / joke / briefing
+├── notifier.py          # Email digest scheduler (06/12/18/22)
+├── web_server.py        # FastAPI dashboard, search, panels, market ticker
+├── earnings_monitor.py  # Finnhub earnings + IPO + macro calendar
+├── polymarket_monitor.py# Prediction market feed
+├── papers_monitor.py    # HuggingFace papers + arXiv trending
+├── subscribers.py       # Email subscriber list management
+├── .env.example         # Environment variable template
+├── requirements.txt     # Python dependencies
+└── logs/                # Runtime logs (auto-created, not tracked in git)
 ```
 
 ## Customizing Tracked Sources
