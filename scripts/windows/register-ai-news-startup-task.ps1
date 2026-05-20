@@ -1,8 +1,8 @@
 param(
-    [string]$TaskName = "AI-News-WSL-Autostart",
-    [string]$DistroName = "Ubuntu-22.04",
+    [string]$TaskName = "AI-News-Autostart",
+    [string]$DistroName = "Ubuntu",
     [string]$ProjectDir = "C:\Users\liziy\Code\AI-News",
-    [string]$ServiceName = "ai-news-docker.service"
+    [string]$ServiceList = "ai-news ai-news-tunnel ai-news-tunnel-yunflow"
 )
 
 $startupScript = Join-Path $ProjectDir "scripts\windows\start-ai-news-wsl.ps1"
@@ -20,7 +20,7 @@ if (-not (Test-Path $pwsh)) {
 
 $action = New-ScheduledTaskAction `
     -Execute $pwsh `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$startupScript`" -DistroName `"$DistroName`" -ServiceName `"$ServiceName`""
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$startupScript`" -DistroName `"$DistroName`" -ServiceList `"$ServiceList`""
 
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest

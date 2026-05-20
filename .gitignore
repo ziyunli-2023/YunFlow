@@ -1,5 +1,6 @@
 # Credentials & secrets — NEVER commit
 .env
+.env.*
 
 # Database (user-specific scraped data)
 news.db

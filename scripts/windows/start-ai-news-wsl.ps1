@@ -1,6 +1,6 @@
 param(
-    [string]$DistroName = "Ubuntu-22.04",
-    [string]$ServiceName = "ai-news-docker.service"
+    [string]$DistroName = "Ubuntu",
+    [string]$ServiceList = "ai-news ai-news-tunnel ai-news-tunnel-yunflow"
 )
 
 $wsl = Join-Path $env:SystemRoot "System32\wsl.exe"
@@ -15,7 +15,7 @@ $arguments = @(
     "-u", "root",
     "--",
     "bash", "-lc",
-    "systemctl start $ServiceName && systemctl is-active $ServiceName"
+    "systemctl start $ServiceList && systemctl is-active $ServiceList"
 )
 
 $output = & $wsl @arguments 2>&1
