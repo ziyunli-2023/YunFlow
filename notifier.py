@@ -521,7 +521,7 @@ class EmailNotifier:
 
         # ── 😂 Joke of the day ────────────────────────────────────────────
         if jokes:
-            email_jokes = jokes[:3]
+            email_jokes = jokes[:2]
             jokes_html = "".join(
                 f"<div style='padding:10px 0;font-size:14px;color:#374151;line-height:1.8;"
                 f"white-space:pre-wrap;border-bottom:1px solid #fcd34d;'>{_html.escape(j)}</div>"
