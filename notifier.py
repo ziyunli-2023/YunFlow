@@ -521,13 +521,14 @@ class EmailNotifier:
 
         # ── 😂 Joke of the day ────────────────────────────────────────────
         if jokes:
+            email_jokes = jokes[:3]
             jokes_html = "".join(
                 f"<div style='padding:10px 0;font-size:14px;color:#374151;line-height:1.8;"
                 f"white-space:pre-wrap;border-bottom:1px solid #fcd34d;'>{_html.escape(j)}</div>"
-                if i < len(jokes) - 1 else
+                if i < len(email_jokes) - 1 else
                 f"<div style='padding:10px 0;font-size:14px;color:#374151;line-height:1.8;"
                 f"white-space:pre-wrap;'>{_html.escape(j)}</div>"
-                for i, j in enumerate(jokes)
+                for i, j in enumerate(email_jokes)
             )
             html_parts.append(f"""
   <div style='background:#fffbeb;border:1px solid #fcd34d;border-left:4px solid #f59e0b;
