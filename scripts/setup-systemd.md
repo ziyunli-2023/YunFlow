@@ -85,4 +85,5 @@ sudo systemctl stop ai-news ai-news-tunnel
 
 ---
 
-完成后访问：**https://news.ziyunli.net**
+完成后访问（主域）：**https://yunflow.net**
+旧域名仍可用：https://news.ziyunli.net
