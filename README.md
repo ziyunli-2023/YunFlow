@@ -1,10 +1,23 @@
 # YunFlow — Your AI & Markets News Monitor
 
-> Self-hosted dashboard that streams AI, markets, geopolitics, and prediction-market news from X and RSS into one place. Live at **[yunflow.net](https://yunflow.net)**.
+<p align="center">
+  <a href="https://yunflow.net">
+    <img src="https://img.shields.io/badge/🌐_Open_YunFlow-Live_at_yunflow.net-0f3460?style=for-the-badge" alt="Open YunFlow live demo">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://yunflow.net">
+    <img src="docs/demo.gif" alt="YunFlow dashboard demo" width="800">
+  </a>
+</p>
+
+> Self-hosted dashboard that streams AI, markets, geopolitics, and prediction-market news from X and RSS into one place.
 
 YunFlow collects updates from leading AI researchers, labs, founders, technical blogs, finance feeds, and prediction markets across X (Twitter) and RSS, stores everything in SQLite, and serves the results through a bilingual web dashboard. It also generates AI-curated digests, daily briefings, and snarky financial jokes via DeepSeek, sends email digests on a 4-slot schedule, and exposes the dataset through an MCP server for coding agents.
 
 **Features:**
+- 🌐 **Live website** — [yunflow.net](https://yunflow.net) — try it before installing
 - **X & RSS Monitors** — 8 AI figures (Karpathy, Sam Altman, etc.) + 25+ feeds (OpenAI, Anthropic, DeepMind, arXiv, finance, geopolitics)
 - **Web Dashboard** — Bilingual (zh/en), live market ticker, category filters, full-text search
   - 📋 **News Digest** — AI-curated pool of 30 highlights across 6 domains; refresh cycles next batch of 6 (regenerated every 30 min)
