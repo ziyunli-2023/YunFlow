@@ -186,6 +186,35 @@ def send_application_received_email(email: str, name: str = "") -> None:
     _send_smtp(email, "看牛韵新闻 · 已收到你的会员申请", html, text)
 
 
+def send_application_rejected_email(email: str, name: str = "") -> None:
+    """Politely notify an applicant that their request was not approved."""
+    greeting = f"嗨 {name}," if name else "你好,"
+    html = f"""<html><body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+  max-width:520px;margin:auto;padding:32px;background:#fff;color:#222;'>
+  <div style='background:#0f3460;color:#fff;padding:18px 22px;border-radius:10px 10px 0 0;'>
+    <h1 style='margin:0;font-size:18px;'>看牛韵新闻 · 关于你的会员申请</h1>
+  </div>
+  <div style='padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;'>
+    <p style='font-size:14px;line-height:1.7;color:#374151;'>{greeting}</p>
+    <p style='font-size:14px;line-height:1.7;color:#374151;'>
+      感谢你对「看牛韵新闻」的关注。很遗憾,本次我们暂时无法把你
+      加入会员名单。这并不代表对你个人的评价,只是当前阶段我们
+      希望保持一个相对小的圈子。
+    </p>
+    <p style='font-size:14px;line-height:1.7;color:#374151;'>
+      未来如有调整,我们会再联系你。也欢迎你继续关注我们的公开内容。
+    </p>
+    <p style='font-size:12px;color:#aaa;margin:24px 0 0;border-top:1px solid #eee;padding-top:16px;'>
+      如果你认为这是误判,可以直接回复这封邮件说明情况。
+    </p>
+  </div>
+</body></html>"""
+    text = (f"{greeting}\n感谢你对「看牛韵新闻」的关注。\n"
+            "很遗憾,本次我们暂时无法把你加入会员名单。\n"
+            "未来如有调整,我们会再联系你。\n")
+    _send_smtp(email, "看牛韵新闻 · 关于你的会员申请", html, text)
+
+
 # ── FastAPI dependencies ───────────────────────────────────────────────────
 
 def current_subscriber(request: Request) -> Optional[Subscriber]:

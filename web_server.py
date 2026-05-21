@@ -3745,12 +3745,18 @@ def admin_approve_request(req_id: int, sub=Depends(auth.require_admin)):
 
 @app.post("/admin/requests/{req_id}/reject")
 def admin_reject_request(req_id: int, sub=Depends(auth.require_admin)):
-    """Reject a pending request. No email is sent to the applicant."""
+    """Reject a pending request and notify the applicant."""
     from urllib.parse import quote
     try:
         req = subscribers.reject_request(req_id, reviewed_by=sub.email)
     except ValueError as e:
         return _redirect(f"/admin?err={quote(str(e))}")
-    return _redirect(f"/admin?flash={quote(f'已拒绝 {req.email}。')}")
+    try:
+        auth.send_application_rejected_email(req.email, req.name or "")
+        flash = f"已拒绝 {req.email},通知邮件已发送。"
+    except Exception as e:
+        logger.error("Rejection email failed for %s: %s", req.email, e)
+        flash = f"已拒绝 {req.email},但通知邮件发送失败 ({e})。"
+    return _redirect(f"/admin?flash={quote(flash)}")
 
 

@@ -14,7 +14,7 @@ Membership requests (apply-for-access flow)
     python invite.py --requests                  # list pending applications
     python invite.py --approve 7                 # approve by request id
     python invite.py --approve alice@example.com # approve by email
-    python invite.py --reject 7                  # reject by id (no email sent)
+    python invite.py --reject 7                  # reject by id + send rejection email
 
 Notes
 -----
@@ -204,7 +204,13 @@ def cmd_reject_request(ident: str, reviewed_by: str) -> int:
         print(f"× Request {req.id} is already {req.status}.", file=sys.stderr)
         return 1
     req = subscribers.reject_request(req.id, reviewed_by=reviewed_by)
-    print(f"✓ Rejected request {req.id} for {req.email} (no email sent)")
+    print(f"✓ Rejected request {req.id} for {req.email}")
+    try:
+        auth.send_application_rejected_email(req.email, req.name or "")
+        print(f"✓ Rejection email sent to {req.email}")
+    except Exception as e:
+        print(f"⚠ Rejection saved but email failed: {e}", file=sys.stderr)
+        return 2
     return 0
 
 
