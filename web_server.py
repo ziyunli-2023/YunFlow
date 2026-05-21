@@ -26,8 +26,8 @@ _briefing_cache: dict = {}   # keyed by lang
 _briefing_cache_at: dict = {}
 _digest_cache: dict = {}     # keyed by lang
 _digest_cache_at: dict = {}
-_joke_cache: list = []
-_joke_cache_at: float = 0
+_joke_cache: dict = {}       # keyed by lang
+_joke_cache_at: dict = {}
 
 # ── WebSocket connection manager ───────────────────────────────────────────
 class ConnectionManager:
@@ -276,22 +276,21 @@ def digest_summary(lang: str = "zh"):
 
 
 @app.get("/api/joke")
-def get_joke():
+def get_joke(lang: str = "zh"):
     """Return cached joke pool (up to 10); regenerate every 30 min."""
-    global _joke_cache, _joke_cache_at
-    if _joke_cache and time.time() - _joke_cache_at < _CACHE_TTL:
-        return {"jokes": _joke_cache}
+    if _joke_cache.get(lang) and time.time() - _joke_cache_at.get(lang, 0) < _CACHE_TTL:
+        return {"jokes": _joke_cache[lang]}
     import ai_processor
     posts_by_cat = storage.get_recent_posts_by_category(hours=24, limit_per_category=10)
     all_posts = []
     for posts in posts_by_cat.values():
         all_posts.extend(posts[:5])
     items = [{"type": "post", "data": p} for p in all_posts]
-    result = ai_processor.generate_joke(items)
+    result = ai_processor.generate_joke(items, lang=lang)
     if result:
-        _joke_cache = result
-        _joke_cache_at = time.time()
-    return {"jokes": _joke_cache}
+        _joke_cache[lang] = result
+        _joke_cache_at[lang] = time.time()
+    return {"jokes": _joke_cache.get(lang, [])}
 
 
 @app.get("/api/briefing")
@@ -719,6 +718,15 @@ const STRINGS = {
     connecting:'连接中…', connected:'实时连接', reconnecting:'重连中…',
     searchPlaceholder:'搜索新闻…', newBadge:'↑ 有新内容',
     jokeTitle:'😂 今日笑话', jokeLoading:'正在生成…', jokeFail:'生成失败',
+    jokeEmpty:'今日新闻太无聊，段子写不出来。',
+    jokeExhausted:[
+      '没了，就这些，满意了吗。',
+      '这些段子我绞尽脑汁想出来的，就这么不够看？',
+      '今天新闻就这么无聊，又不是我的错。',
+      '我的才华不是用来喂刷新键的。',
+      '行了，我罢工了，30分钟后再说。',
+      '……',
+    ],
     digestTitle:'📋 资讯摘要', briefingTitle:'⚡ 每日要闻速报',
     trumpTitle:'🇺🇸 特朗普动向', trumpViewAll:'查看全部 →',
     refresh:'↻ 刷新', loadingDigest:'正在生成摘要…', loadingBriefing:'正在生成速报…',
@@ -752,6 +760,15 @@ const STRINGS = {
     connecting:'Connecting…', connected:'Live', reconnecting:'Reconnecting…',
     searchPlaceholder:'Search news…', newBadge:'↑ New items',
     jokeTitle:'😂 Joke of the Day', jokeLoading:'Generating…', jokeFail:'Failed to generate',
+    jokeEmpty:"Today's news was too dull to spin into jokes.",
+    jokeExhausted:[
+      "That's all the jokes I've got. Happy now?",
+      "I wrung my brain dry for these — still not enough?",
+      "Blame the boring news, not me.",
+      "My wit isn't fuel for your refresh button.",
+      "Fine, I'm on strike. Try again in 30 minutes.",
+      '...',
+    ],
     digestTitle:'📋 News Digest', briefingTitle:'⚡ Daily Briefing',
     trumpTitle:'🇺🇸 Trump Watch', trumpViewAll:'View all →',
     refresh:'↻ Refresh', loadingDigest:'Generating digest…', loadingBriefing:'Generating briefing…',
@@ -791,6 +808,8 @@ function setLang(l) {
   }
   loadBriefing();
   loadDigest();
+  _jokePool = []; _jokeIdx = 0; _jokeExhaustedIdx = 0;
+  loadJoke();
 }
 function applyLang() {
   const label = lang === 'zh' ? 'EN' : '中';
@@ -1260,14 +1279,6 @@ async function loadBriefing() {
 // ── Digest ────────────────────────────────────────────────────────────────
 let _jokePool = [];
 let _jokeIdx = 0;
-const _JOKE_EXHAUSTED = [
-  '没了，就这些，满意了吗。',
-  '这些段子我绞尽脑汁想出来的，就这么不够看？',
-  '今天新闻就这么无聊，又不是我的错。',
-  '我的才华不是用来喂刷新键的。',
-  '行了，我罢工了，30分钟后再说。',
-  '……',
-];
 let _jokeExhaustedIdx = 0;
 
 function _renderJoke(jokes) {
@@ -1287,7 +1298,8 @@ async function loadJoke(refresh = false) {
     // Cycle locally — no API call
     _jokeIdx++;
     if (_jokeIdx >= _jokePool.length) {
-      el.textContent = _JOKE_EXHAUSTED[Math.min(_jokeExhaustedIdx, _JOKE_EXHAUSTED.length - 1)];
+      const pool = STRINGS[lang].jokeExhausted;
+      el.textContent = pool[Math.min(_jokeExhaustedIdx, pool.length - 1)];
       _jokeExhaustedIdx++;
       return;
     }
@@ -1297,11 +1309,11 @@ async function loadJoke(refresh = false) {
   // Initial load: fetch from API
   el.innerHTML = '<span class="panel-loading">' + t('jokeLoading') + '</span>';
   try {
-    const data = await fetch('/api/joke').then(r => r.json());
+    const data = await fetch('/api/joke?lang=' + lang).then(r => r.json());
     _jokePool = Array.isArray(data.jokes) ? data.jokes : [];
     _jokeIdx = 0;
     _jokeExhaustedIdx = 0;
-    if (!_jokePool.length) { el.textContent = '今日新闻太无聊，段子写不出来。'; return; }
+    if (!_jokePool.length) { el.textContent = t('jokeEmpty'); return; }
     _renderJoke([_jokePool[0]]);
   } catch(e) { el.textContent = t('jokeFail'); }
 }
@@ -1423,6 +1435,7 @@ async function showPodcasts(btn) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   currentFilter = 'podcasts';
+  showPanels(false);
   closeSidebar();
 
   const feed = document.getElementById('cardFeed');

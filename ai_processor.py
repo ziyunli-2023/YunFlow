@@ -445,7 +445,7 @@ Return strictly as a JSON array, no extra text:
         return []
 
 
-def generate_joke(items: list[dict]) -> list[str]:
+def generate_joke(items: list[dict], lang: str = "zh") -> list[str]:
     """
     Generate up to 10 jokes grounded in today's real news, sorted best-first
     by the model's self-score. Returns a list of joke strings (pool for
@@ -458,8 +458,12 @@ def generate_joke(items: list[dict]) -> list[str]:
     lines = []
     for i, item in enumerate(candidates):
         d = item.get("item") or item.get("data") or item
-        title = d.get("title_zh") or d.get("title") or ""
-        summary = (d.get("summary_zh") or d.get("summary") or "")[:100]
+        if lang == "en":
+            title = d.get("title") or d.get("title_zh") or ""
+            summary = (d.get("summary") or d.get("summary_zh") or "")[:100]
+        else:
+            title = d.get("title_zh") or d.get("title") or ""
+            summary = (d.get("summary_zh") or d.get("summary") or "")[:100]
         text = d.get("text", "")
         if text:
             lines.append(f"{i+1}. {text[:150]}")
@@ -469,7 +473,23 @@ def generate_joke(items: list[dict]) -> list[str]:
             lines.append(f"{i+1}. {title}")
     news_list = "\n".join(lines)
 
-    prompt = f"""你是一位毒舌财经脱口秀编剧，擅长把今天真实发生的新闻事件改编成幽默段子。
+    if lang == "en":
+        prompt = f"""You are a sharp-tongued business/tech late-night comedy writer who turns today's real news into punchy jokes.
+
+Today's news (the ONLY source — do not invent events):
+{news_list}
+
+Task: Write up to 10 jokes, each rooted in a different news item.
+- Any form: one-liners, twists, fake quotes, deadpan observations, satire
+- Sharp, witty, with a turn or a punchline — make people smirk
+- Keep each joke under 240 characters
+- Honestly score each joke 1-5; only genuinely funny ones get high scores
+- If a joke is weak, give it a low score — do not pad to hit 10
+
+Return STRICTLY this JSON array, no extra text:
+[{{"joke": "the joke text", "score": 4}}, ...]"""
+    else:
+        prompt = f"""你是一位毒舌财经脱口秀编剧，擅长把今天真实发生的新闻事件改编成幽默段子。
 
 今天的新闻（只能从这里取材，不能编造）：
 {news_list}

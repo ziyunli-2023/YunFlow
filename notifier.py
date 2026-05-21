@@ -21,7 +21,7 @@ SEND_HOURS = {6, 12, 18, 22}
 SEND_WINDOWS = {6: 8, 12: 6, 18: 6, 22: 4}   # hour → look-back hours
 SEND_LABELS  = {6: "早报", 12: "午报", 18: "晚报", 22: "夜报"}
 
-# Earnings calendar block — included in 07:00 (today) and 20:00 (tomorrow's preview)
+# Earnings calendar block — included in 06:00 (today) and 22:00 (tomorrow's preview)
 _HOUR_LABEL_ZH = {"bmo": "盘前", "amc": "盘后", "dmh": "盘中"}
 _IMPACT_COLOR  = {"high": "#dc2626", "medium": "#ea580c", "low": "#6b7280"}
 _IMPACT_LABEL  = {"high": "高影响", "medium": "中影响", "low": "低影响"}
