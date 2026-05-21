@@ -113,6 +113,13 @@ def list_active_subscribers() -> list[Subscriber]:
         return [Subscriber.from_row(r) for r in rows]
 
 
+def list_all_subscribers() -> list[Subscriber]:
+    """All subscribers regardless of status. Used by /admin member panel."""
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM subscribers ORDER BY id").fetchall()
+        return [Subscriber.from_row(r) for r in rows]
+
+
 def get_by_email(email: str) -> Optional[Subscriber]:
     email = (email or "").lower().strip()
     if not email:
@@ -151,6 +158,49 @@ def add_subscriber(email: str, name: str = "", tier: str = "free",
         )
         sub_id = cur.lastrowid
     logger.info("Subscriber added: %s (tier=%s, status=%s)", email, tier, status)
+    return get_by_id(sub_id)  # type: ignore[return-value]
+
+
+_VALID_STATUSES = {"active", "paused", "invited", "churned"}
+_VALID_TIERS    = {"free", "paid"}
+
+
+def set_status(sub_id: int, status: str) -> Subscriber:
+    """Update a subscriber's status. Raises ValueError on unknown status/id.
+
+    Side effect: when status moves away from 'active' we wipe sessions so
+    the user is logged out immediately. Doesn't touch magic_links — those
+    naturally expire.
+    """
+    if status not in _VALID_STATUSES:
+        raise ValueError(f"invalid status: {status!r}")
+    sub = get_by_id(sub_id)
+    if sub is None:
+        raise ValueError(f"unknown subscriber id: {sub_id}")
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE subscribers SET status=?, updated_at=? WHERE id=?",
+            (status, _now(), sub_id)
+        )
+        if status != "active":
+            conn.execute("DELETE FROM sessions WHERE subscriber_id=?", (sub_id,))
+    logger.info("Subscriber %s status → %s", sub.email, status)
+    return get_by_id(sub_id)  # type: ignore[return-value]
+
+
+def set_tier(sub_id: int, tier: str) -> Subscriber:
+    """Update a subscriber's tier (free/paid). Raises ValueError on unknown."""
+    if tier not in _VALID_TIERS:
+        raise ValueError(f"invalid tier: {tier!r}")
+    sub = get_by_id(sub_id)
+    if sub is None:
+        raise ValueError(f"unknown subscriber id: {sub_id}")
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE subscribers SET tier=?, updated_at=? WHERE id=?",
+            (tier, _now(), sub_id)
+        )
+    logger.info("Subscriber %s tier → %s", sub.email, tier)
     return get_by_id(sub_id)  # type: ignore[return-value]
 
 

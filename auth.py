@@ -215,6 +215,63 @@ def send_application_rejected_email(email: str, name: str = "") -> None:
     _send_smtp(email, "看牛韵新闻 · 关于你的会员申请", html, text)
 
 
+# ── Account-state change notifications ────────────────────────────────────
+#
+# Sent when an admin pauses / resumes / upgrades / downgrades a member. Each
+# variant has a different subject + body — kept as one dispatcher so callers
+# pass a single `change` string and don't have to know the templates.
+
+_ACCOUNT_CHANGE_BODIES = {
+    "paused": (
+        "看牛韵新闻 · 账号已暂停",
+        "你的账号已被管理员暂停。",
+        "在恢复之前,你不会再收到每日 digest,也无法登录访问会员内容。"
+        "如果你认为这是误操作,可以直接回复这封邮件。",
+    ),
+    "resumed": (
+        "看牛韵新闻 · 账号已恢复",
+        "你的账号已恢复正常。",
+        "你可以重新登录,并将继续收到每天 07:00 / 12:00 / 20:00 三封 digest。"
+        "欢迎回来 🎉",
+    ),
+    "upgraded": (
+        "看牛韵新闻 · 已升级为付费会员",
+        "你的账号已升级为付费会员。",
+        "现在你可以访问会员专享: AI 板块轮动 dashboard、关键词智能匹配新闻、"
+        "未来研究工具。感谢支持!",
+    ),
+    "downgraded": (
+        "看牛韵新闻 · 账号已降级",
+        "你的账号已降级为免费用户。",
+        "你仍可以登录,但会员专享页面将不再可见。"
+        "如果你认为这是误操作,可以直接回复这封邮件。",
+    ),
+}
+
+
+def send_account_change_email(email: str, name: str, change: str) -> None:
+    """Notify a member about a status/tier change. `change` ∈
+    {paused, resumed, upgraded, downgraded}. Raises KeyError if unknown."""
+    subject, headline, body = _ACCOUNT_CHANGE_BODIES[change]
+    greeting = f"嗨 {name}," if name else "你好,"
+    html = f"""<html><body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+  max-width:520px;margin:auto;padding:32px;background:#fff;color:#222;'>
+  <div style='background:#0f3460;color:#fff;padding:18px 22px;border-radius:10px 10px 0 0;'>
+    <h1 style='margin:0;font-size:18px;'>{subject}</h1>
+  </div>
+  <div style='padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;'>
+    <p style='font-size:14px;line-height:1.7;color:#374151;'>{greeting}</p>
+    <p style='font-size:14px;line-height:1.7;color:#374151;'><b>{headline}</b></p>
+    <p style='font-size:14px;line-height:1.7;color:#374151;'>{body}</p>
+    <p style='font-size:12px;color:#aaa;margin:24px 0 0;border-top:1px solid #eee;padding-top:16px;'>
+      —— 看牛韵新闻
+    </p>
+  </div>
+</body></html>"""
+    text = f"{greeting}\n{headline}\n{body}\n"
+    _send_smtp(email, subject, html, text)
+
+
 # ── FastAPI dependencies ───────────────────────────────────────────────────
 
 def current_subscriber(request: Request) -> Optional[Subscriber]:

@@ -6,7 +6,7 @@ import time
 from typing import Set
 
 import httpx
-from fastapi import Depends, FastAPI, Form, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import storage
@@ -3684,6 +3684,100 @@ def admin_page(request: Request, sub=Depends(auth.require_admin),
         "<p style='color:#888;font-size:13px;padding:12px 0;'>暂无历史记录。</p>"
     )
 
+    # ── Members panel ──
+    all_subs = subscribers.list_all_subscribers()
+
+    def _status_pill(s) -> str:
+        colors = {
+            "active":  ("#dcfce7", "#166534"),
+            "paused":  ("#fef3c7", "#92400e"),
+            "invited": ("#dbeafe", "#1e40af"),
+            "churned": ("#f3f4f6", "#6b7280"),
+        }
+        bg, fg = colors.get(s.status, ("#f3f4f6", "#6b7280"))
+        label = {"active": "在用", "paused": "已暂停",
+                 "invited": "已邀请", "churned": "流失"}.get(s.status, s.status)
+        return (f"<span style='background:{bg};color:{fg};padding:2px 8px;"
+                f"border-radius:999px;font-size:11px;font-weight:600;'>{label}</span>")
+
+    def _tier_pill(s) -> str:
+        if s.tier == "paid":
+            return ("<span style='background:#0f3460;color:#fff;padding:2px 8px;"
+                    "border-radius:999px;font-size:11px;font-weight:600;'>付费</span>")
+        return ("<span style='background:#e5e7eb;color:#4b5563;padding:2px 8px;"
+                "border-radius:999px;font-size:11px;font-weight:600;'>免费</span>")
+
+    def _member_actions(s) -> str:
+        # Block self-modification: an admin can't lock themselves out
+        if s.id == sub.id:
+            return ("<span style='font-size:11px;color:#888;font-style:italic;'>"
+                    "(你自己)</span>")
+        btn_base = ("padding:5px 10px;font-size:11px;border:1px solid #d1d5db;"
+                    "border-radius:5px;cursor:pointer;background:#fff;color:#374151;"
+                    "font-weight:500;")
+        btn_warn = ("padding:5px 10px;font-size:11px;border:1px solid #fecaca;"
+                    "border-radius:5px;cursor:pointer;background:#fff;color:#991b1b;"
+                    "font-weight:500;")
+        btn_good = ("padding:5px 10px;font-size:11px;border:1px solid #86efac;"
+                    "border-radius:5px;cursor:pointer;background:#fff;color:#166534;"
+                    "font-weight:500;")
+        buttons = []
+        if s.status == "active":
+            buttons.append(
+                f"<form method='post' action='/admin/subscribers/{s.id}/pause' style='margin:0;display:inline;'>"
+                f"<button type='submit' style='{btn_warn}' "
+                f"onclick=\"return confirm('暂停 {s.email}?该会员将无法登录,且不再收 digest。')\""
+                f">暂停</button></form>"
+            )
+        elif s.status == "paused":
+            buttons.append(
+                f"<form method='post' action='/admin/subscribers/{s.id}/resume' style='margin:0;display:inline;'>"
+                f"<button type='submit' style='{btn_good}'>恢复</button></form>"
+            )
+        if s.tier == "paid":
+            buttons.append(
+                f"<form method='post' action='/admin/subscribers/{s.id}/downgrade' style='margin:0;display:inline;'>"
+                f"<button type='submit' style='{btn_base}' "
+                f"onclick=\"return confirm('降级 {s.email} 为免费用户?')\""
+                f">降级</button></form>"
+            )
+        else:
+            buttons.append(
+                f"<form method='post' action='/admin/subscribers/{s.id}/upgrade' style='margin:0;display:inline;'>"
+                f"<button type='submit' style='{btn_base}'>升级</button></form>"
+            )
+        return "<div style='display:flex;gap:6px;flex-wrap:wrap;'>" + "".join(buttons) + "</div>"
+
+    def _member_row(s) -> str:
+        name_html = (f"<div style='font-size:11px;color:#888;margin-top:2px;'>"
+                     f"{_h.escape(s.name)}</div>") if s.name else ""
+        return f"""
+    <tr style='border-bottom:1px solid #f1f5f9;'>
+      <td style='padding:10px 8px;font-size:13px;vertical-align:top;'>
+        <div style='font-weight:600;color:#0f3460;word-break:break-all;'>
+          {_h.escape(s.email)}
+        </div>
+        {name_html}
+      </td>
+      <td style='padding:10px 8px;vertical-align:top;'>{_status_pill(s)}</td>
+      <td style='padding:10px 8px;vertical-align:top;'>{_tier_pill(s)}</td>
+      <td style='padding:10px 8px;vertical-align:top;'>{_member_actions(s)}</td>
+    </tr>"""
+
+    members_html = (
+        f"<table style='width:100%;border-collapse:collapse;'>"
+        f"<thead><tr style='background:#f9fafb;text-align:left;'>"
+        f"<th style='padding:8px;font-size:12px;color:#6b7280;'>邮箱</th>"
+        f"<th style='padding:8px;font-size:12px;color:#6b7280;'>状态</th>"
+        f"<th style='padding:8px;font-size:12px;color:#6b7280;'>等级</th>"
+        f"<th style='padding:8px;font-size:12px;color:#6b7280;'>操作</th>"
+        f"</tr></thead><tbody>"
+        + "".join(_member_row(s) for s in all_subs)
+        + "</tbody></table>"
+        if all_subs else
+        "<p style='color:#888;font-size:13px;padding:12px 0;'>暂无会员。</p>"
+    )
+
     return f"""<!DOCTYPE html>
 <html lang='zh'><head>
   <meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
@@ -3710,9 +3804,17 @@ def admin_page(request: Request, sub=Depends(auth.require_admin),
       {pending_html}
     </div>
     <div style='background:#fff;border-radius:12px;
+                box-shadow:0 4px 24px rgba(0,0,0,.06);padding:24px;
+                margin-bottom:20px;'>
+      <h2 style='margin:0 0 16px;font-size:15px;color:#0f3460;'>
+        现有会员 ({len(all_subs)})
+      </h2>
+      {members_html}
+    </div>
+    <div style='background:#fff;border-radius:12px;
                 box-shadow:0 4px 24px rgba(0,0,0,.06);padding:24px;'>
       <h2 style='margin:0 0 12px;font-size:15px;color:#0f3460;'>
-        最近 50 条历史
+        最近 50 条审批历史
       </h2>
       {recent_html}
     </div>
@@ -3758,5 +3860,78 @@ def admin_reject_request(req_id: int, sub=Depends(auth.require_admin)):
         logger.error("Rejection email failed for %s: %s", req.email, e)
         flash = f"已拒绝 {req.email},但通知邮件发送失败 ({e})。"
     return _redirect(f"/admin?flash={quote(flash)}")
+
+
+# ── Admin: existing-member management ─────────────────────────────────────
+#
+# Shared shape: each endpoint looks up the subscriber, blocks self-modification
+# (an admin can't lock themselves out by accident), runs the mutation, and
+# best-effort sends a notification email. Email failure logs a warning but
+# does NOT undo the state change.
+
+def _guard_not_self(target: "subscribers.Subscriber", admin: "subscribers.Subscriber") -> None:
+    """Raise 400 if the admin is trying to modify their own row."""
+    if target.id == admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cannot modify your own account from /admin",
+        )
+
+
+def _admin_redirect(flash: str | None = None, err: str | None = None) -> RedirectResponse:
+    from urllib.parse import quote
+    if err:
+        return _redirect(f"/admin?err={quote(err)}")
+    if flash:
+        return _redirect(f"/admin?flash={quote(flash)}")
+    return _redirect("/admin")
+
+
+def _apply_member_change(sub_id: int, admin, *, new_status: str | None = None,
+                        new_tier: str | None = None, change_label: str,
+                        email_change: str) -> RedirectResponse:
+    """Internal helper for the 4 member actions — DRY the lookup + email path."""
+    target = subscribers.get_by_id(sub_id)
+    if target is None:
+        return _admin_redirect(err=f"未找到会员 id={sub_id}")
+    _guard_not_self(target, admin)
+    try:
+        if new_status is not None:
+            target = subscribers.set_status(sub_id, new_status)
+        if new_tier is not None:
+            target = subscribers.set_tier(sub_id, new_tier)
+    except ValueError as e:
+        return _admin_redirect(err=str(e))
+    try:
+        auth.send_account_change_email(target.email, target.name or "", email_change)
+        flash = f"已{change_label} {target.email},通知邮件已发送。"
+    except Exception as e:
+        logger.error("Account-change email failed for %s: %s", target.email, e)
+        flash = f"已{change_label} {target.email},但通知邮件发送失败 ({e})。"
+    return _admin_redirect(flash=flash)
+
+
+@app.post("/admin/subscribers/{sub_id}/pause")
+def admin_pause_subscriber(sub_id: int, sub=Depends(auth.require_admin)):
+    return _apply_member_change(sub_id, sub, new_status="paused",
+                               change_label="暂停", email_change="paused")
+
+
+@app.post("/admin/subscribers/{sub_id}/resume")
+def admin_resume_subscriber(sub_id: int, sub=Depends(auth.require_admin)):
+    return _apply_member_change(sub_id, sub, new_status="active",
+                               change_label="恢复", email_change="resumed")
+
+
+@app.post("/admin/subscribers/{sub_id}/downgrade")
+def admin_downgrade_subscriber(sub_id: int, sub=Depends(auth.require_admin)):
+    return _apply_member_change(sub_id, sub, new_tier="free",
+                               change_label="降级", email_change="downgraded")
+
+
+@app.post("/admin/subscribers/{sub_id}/upgrade")
+def admin_upgrade_subscriber(sub_id: int, sub=Depends(auth.require_admin)):
+    return _apply_member_change(sub_id, sub, new_tier="paid",
+                               change_label="升级", email_change="upgraded")
 
 
