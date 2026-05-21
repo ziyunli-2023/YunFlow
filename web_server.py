@@ -3,10 +3,11 @@
 import json
 import logging
 import time
+from datetime import datetime
 from typing import Set
 
 import httpx
-from fastapi import Depends, FastAPI, Form, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import storage
@@ -17,6 +18,188 @@ import subscribers
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="YunFlow")
+
+
+def _public_url(path: str) -> str:
+    base = config.BASE_URL.rstrip("/")
+    path = path if path.startswith("/") else f"/{path}"
+    return f"{base}{path}"
+
+
+def _stripe_configured() -> bool:
+    return bool(config.STRIPE_SECRET_KEY and config.STRIPE_WEBHOOK_SECRET
+                and config.STRIPE_VIP_PRICE_ID)
+
+
+def _stripe_module():
+    if not _stripe_configured():
+        raise RuntimeError("Stripe is not fully configured")
+    try:
+        import stripe
+    except ImportError as e:
+        raise RuntimeError("stripe package is not installed") from e
+    stripe.api_key = config.STRIPE_SECRET_KEY
+    return stripe
+
+
+def _stripe_id(value) -> str:
+    if isinstance(value, dict):
+        return str(value.get("id") or "")
+    object_id = getattr(value, "id", None)
+    if object_id:
+        return str(object_id)
+    return str(value or "")
+
+
+def _stripe_session_url(session) -> str:
+    url = session.get("url") if isinstance(session, dict) else getattr(session, "url", "")
+    if not url:
+        raise RuntimeError("Stripe did not return a session URL")
+    return str(url)
+
+
+def _stripe_dict(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    to_dict_recursive = getattr(value, "to_dict_recursive", None)
+    if callable(to_dict_recursive):
+        return to_dict_recursive()
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    return dict(value)
+
+
+def _stripe_ts(value) -> str | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromtimestamp(int(value)).isoformat(timespec="seconds")
+    except Exception:
+        return None
+
+
+def _pretty_account_date(value: str | None, lang: str = "en") -> tuple[str, str]:
+    if not value:
+        return ("No expiration", "Lifetime access") if lang == "en" else ("无到期", "长期有效")
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return (value, "")
+    if lang == "zh":
+        day = f"{dt.year}年{dt.month}月{dt.day}日"
+        time_s = dt.strftime("%H:%M")
+    else:
+        day = dt.strftime("%b %d, %Y")
+        time_s = dt.strftime("%I:%M %p").lstrip("0")
+    return (day, time_s)
+
+
+def _ui_lang(request: Request, explicit: str = "") -> str:
+    explicit = (explicit or "").strip().lower()
+    if explicit in {"en", "zh"}:
+        return explicit
+    cookie_lang = (request.cookies.get("yunflow_lang") or "").strip().lower()
+    if cookie_lang in {"en", "zh"}:
+        return cookie_lang
+    accept = (request.headers.get("accept-language") or "").lower()
+    return "zh" if accept.startswith("zh") else "en"
+
+
+def _resolve_stripe_subscriber(subscription: dict):
+    metadata = subscription.get("metadata") or {}
+    sub_id = metadata.get("subscriber_id")
+    if sub_id:
+        try:
+            sub = subscribers.get_by_id(int(sub_id))
+            if sub:
+                return sub
+        except (TypeError, ValueError):
+            pass
+    sub = subscribers.get_by_stripe_subscription_id(_stripe_id(subscription.get("id")))
+    if sub:
+        return sub
+    return subscribers.get_by_stripe_customer_id(_stripe_id(subscription.get("customer")))
+
+
+def _sync_stripe_subscription_object(subscription: dict):
+    sub = _resolve_stripe_subscriber(subscription)
+    if not sub:
+        logger.warning("Stripe subscription %s has no matching subscriber",
+                       _stripe_id(subscription.get("id")))
+        return
+    period_end = subscription.get("current_period_end")
+    if not period_end:
+        items = subscription.get("items") or {}
+        data = items.get("data") if isinstance(items, dict) else []
+        if data:
+            period_end = data[0].get("current_period_end")
+    cancel_at = subscription.get("cancel_at")
+    cancel_at_period_end = bool(subscription.get("cancel_at_period_end") or cancel_at)
+    if cancel_at_period_end and not cancel_at:
+        cancel_at = period_end
+    subscribers.sync_stripe_subscription(
+        sub.id,
+        customer_id=_stripe_id(subscription.get("customer")),
+        subscription_id=_stripe_id(subscription.get("id")),
+        status=str(subscription.get("status") or ""),
+        current_period_end=_stripe_ts(period_end),
+        cancel_at_period_end=cancel_at_period_end,
+        cancel_at=_stripe_ts(cancel_at),
+    )
+
+
+def _invoice_subscription_id(invoice: dict) -> str:
+    sub_id = _stripe_id(invoice.get("subscription"))
+    if sub_id:
+        return sub_id
+    parent = invoice.get("parent") or {}
+    details = parent.get("subscription_details") or {}
+    return _stripe_id(details.get("subscription"))
+
+
+def _handle_stripe_event(stripe, event: dict) -> None:
+    event_type = event.get("type") or ""
+    obj = (event.get("data") or {}).get("object") or {}
+
+    if event_type == "checkout.session.completed":
+        sub_id = (obj.get("client_reference_id")
+                  or (obj.get("metadata") or {}).get("subscriber_id"))
+        customer_id = _stripe_id(obj.get("customer"))
+        subscription_id = _stripe_id(obj.get("subscription"))
+        if sub_id and customer_id:
+            try:
+                subscribers.set_stripe_customer(int(sub_id), customer_id)
+            except (TypeError, ValueError):
+                logger.warning("invalid subscriber id in Stripe checkout session: %r", sub_id)
+        if subscription_id:
+            subscription = stripe.Subscription.retrieve(subscription_id)
+            _sync_stripe_subscription_object(_stripe_dict(subscription))
+        return
+
+    if event_type in {
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+    }:
+        _sync_stripe_subscription_object(obj)
+        return
+
+    if event_type in {"invoice.paid", "invoice.payment_succeeded", "invoice.payment_failed"}:
+        subscription_id = _invoice_subscription_id(obj)
+        if subscription_id:
+            subscription = stripe.Subscription.retrieve(subscription_id)
+            _sync_stripe_subscription_object(_stripe_dict(subscription))
+        elif obj.get("customer"):
+            sub = subscribers.get_by_stripe_customer_id(_stripe_id(obj.get("customer")))
+            if sub:
+                subscribers.sync_stripe_subscription(
+                    sub.id,
+                    customer_id=_stripe_id(obj.get("customer")),
+                    subscription_id=sub.stripe_subscription_id or "",
+                    status=sub.stripe_subscription_status or "",
+                    current_period_end=sub.stripe_current_period_end,
+                )
 
 _CACHE_TTL = 30 * 60  # 30 minutes
 _MARKETS_TTL = 30     # 30 seconds (Yahoo only feeds the day-over-day baseline; live ticks come from Pyth on the frontend)
@@ -741,6 +924,7 @@ const STRINGS = {
     bnavAll:'全部', bnavPapers:'论文', bnavVenture:'创投', bnavStocks:'美股', bnavMore:'更多',
     bnavTrump:'特朗普', bnavGeo:'地缘',
     navEarnings:'📅 财报日历',
+    accountLogin:'登录',
   },
   en: {
     navAll:'🌐 All', navAI:'🤖 AI', navPapers:'📄 Papers', navWeb3:'🔗 Web3',
@@ -774,14 +958,23 @@ const STRINGS = {
     bnavAll:'All', bnavPapers:'Papers', bnavVenture:'VC', bnavStocks:'Stocks', bnavMore:'More',
     bnavTrump:'Trump', bnavGeo:'Geo',
     navEarnings:'📅 Earnings Calendar',
+    accountLogin:'Login',
   }
 };
-let lang = localStorage.getItem('lang') || 'zh';
+function browserDefaultLang() {
+  return ((navigator.language || '').toLowerCase().startsWith('zh')) ? 'zh' : 'en';
+}
+function persistLang(l) {
+  document.cookie = 'yunflow_lang=' + encodeURIComponent(l) + ';path=/;max-age=31536000;samesite=lax';
+}
+let lang = localStorage.getItem('lang') || browserDefaultLang();
+persistLang(lang);
 function t(key, arg) { const v = STRINGS[lang][key]; return typeof v === 'function' ? v(arg) : (v || key); }
 function toggleLang() { setLang(lang === 'zh' ? 'en' : 'zh'); }
 function setLang(l) {
   lang = l;
   localStorage.setItem('lang', l);
+  persistLang(l);
   applyLang();
   // Server-fetched category views must be re-fetched; others re-render from allItems
   if (currentFilter === 'category:papers' || currentFilter === 'category:polymarket') {
@@ -794,6 +987,7 @@ function setLang(l) {
 }
 function applyLang() {
   const label = lang === 'zh' ? 'EN' : '中';
+  document.documentElement.lang = lang;
   document.getElementById('langBtn').textContent = label;
   document.getElementById('langPill').textContent = label;
   document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
@@ -1629,20 +1823,23 @@ _ACCOUNT_PILL_STYLE = (
 )
 
 
-def _account_pill_html(sub) -> str:
+def _account_pill_html(sub, lang: str = "en") -> str:
     """Build the topbar pill that links to /account (or /login if logged out)."""
     if sub is None:
+        login_label = "登录" if lang == "zh" else "Login"
+        login_title = "登录订阅账号" if lang == "zh" else "Sign in to your subscriber account"
         return (
             f"<a href='/login' style='{_ACCOUNT_PILL_STYLE}' "
-            f"title='登录订阅账号'>👤 <span>登录</span></a>"
+            f"title='{login_title}'>👤 <span data-i18n='accountLogin'>{login_label}</span></a>"
         )
     import html as _h
     label = sub.name or sub.email.split("@")[0]
     badge = "★" if subscribers.is_paid(sub) else ""
     badge_html = f' <span style="color:#ca8a04">{badge}</span>' if badge else ''
+    account_title = "查看账号" if lang == "zh" else "View account"
     return (
         f"<a href='/account' style='{_ACCOUNT_PILL_STYLE}' "
-        f"title='查看账号'>👤 <span>{_h.escape(label)}</span>"
+        f"title='{account_title}'>👤 <span>{_h.escape(label)}</span>"
         f"{badge_html}</a>"
     )
 
@@ -1651,7 +1848,7 @@ def _account_pill_html(sub) -> str:
 def dashboard(request: Request):
     storage.record_visit()
     sub = auth.current_subscriber(request)
-    html = DASHBOARD_HTML.replace("<!--ACCOUNT_PILL-->", _account_pill_html(sub))
+    html = DASHBOARD_HTML.replace("<!--ACCOUNT_PILL-->", _account_pill_html(sub, _ui_lang(request)))
     return HTMLResponse(content=html)
 
 
@@ -1667,7 +1864,7 @@ def api_earnings_calendar(
     include_earnings: int = 1,
     include_ipos: int = 1,
     include_macro: int = 1,
-    sub=Depends(auth.require_subscriber),
+    sub=Depends(auth.require_paid),
 ):
     """Return {date: {earnings, ipos, macro}} for [start, end] (YYYY-MM-DD)."""
     if min_cap_m is None:
@@ -2320,7 +2517,14 @@ const L = {
 };
 const CAP_VALUES = [0, 1000, 10000, 50000, 200000, 500000, 1000000];
 
-let lang = localStorage.getItem('lang') || 'zh';
+function browserDefaultLang() {
+  return ((navigator.language || '').toLowerCase().startsWith('zh')) ? 'zh' : 'en';
+}
+function persistLang(l) {
+  document.cookie = 'yunflow_lang=' + encodeURIComponent(l) + ';path=/;max-age=31536000;samesite=lax';
+}
+let lang = localStorage.getItem('lang') || browserDefaultLang();
+persistLang(lang);
 let theme = localStorage.getItem('theme') || 'auto';
 let cursor = new Date(); cursor.setDate(1);
 let data = {};
@@ -2351,7 +2555,7 @@ function toggleTheme() {
 }
 function toggleLang() {
   lang = lang==='zh' ? 'en' : 'zh';
-  localStorage.setItem('lang', lang); applyLang(); render();
+  localStorage.setItem('lang', lang); persistLang(lang); applyLang(); render();
 }
 function applyLang() {
   const l = L[lang];
@@ -2935,7 +3139,7 @@ reload();
 
 
 @app.get("/earnings", response_class=HTMLResponse)
-def earnings_page(sub=Depends(auth.require_subscriber)):
+def earnings_page(sub=Depends(auth.require_paid)):
     storage.record_visit()
     return HTMLResponse(content=EARNINGS_HTML)
 
@@ -3066,6 +3270,19 @@ def _clear_session_cookie(response: Response) -> None:
     )
 
 
+def _subscriber_for_login_email(email: str):
+    """Resolve login email, auto-creating local-only @example.test users."""
+    if not email:
+        return None
+    sub = subscribers.get_by_email(email)
+    if sub:
+        return sub
+    if auth.debug_auth_email_enabled() and email.endswith("@example.test"):
+        logger.info("Auto-creating debug subscriber for %s", email)
+        return subscribers.add_subscriber(email=email, tier="free", status="active")
+    return None
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, next: str = "/", sent: int = 0,
                err: str = "", tab: str = "link", email: str = ""):
@@ -3084,6 +3301,58 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
         return _redirect("/")
 
     import html as _h
+    from urllib.parse import quote
+    lang = _ui_lang(request)
+    login_text = {
+        "en": {
+            "title": "Login · YunFlow News",
+            "brand": "YunFlow News",
+            "intro": ("Members only: AI sector-rotation dashboard, keyword-matched news, "
+                      "and upcoming research tools. Enter your email to sign in without a password."),
+            "link_tab": "Email link",
+            "code_tab": "Code",
+            "link_sent": f"If this email is on the subscriber list, a login link has been sent. It expires in {config.MAGIC_LINK_TTL_MINUTES} minutes.",
+            "code_sent": f"If this email is on the subscriber list, a 6-digit code has been sent. It expires in {config.LOGIN_CODE_TTL_MINUTES} minutes.",
+            "send_link": "Send login link",
+            "link_hint": f"The link expires in {config.MAGIC_LINK_TTL_MINUTES} minutes. Open it to sign in.",
+            "code_to": "Code sent to",
+            "code_placeholder": "6 digits",
+            "login": "Log in",
+            "resend_code": "Resend code",
+            "send_code": "Send code",
+            "code_hint": f"6-digit code, valid for {config.LOGIN_CODE_TTL_MINUTES} minutes.",
+            "footer": "Invited subscribers only. If no email arrives, check the address or contact the administrator.",
+            "errors": {
+                "invalid_link": "Link is invalid or expired. Please request a new one.",
+                "account_inactive": "Account does not exist or is paused.",
+                "invalid_code": "Code is incorrect or expired. Please try again.",
+            },
+        },
+        "zh": {
+            "title": "登录 · 看牛韵新闻",
+            "brand": "看牛韵新闻",
+            "intro": "会员专享:AI 板块轮动 dashboard、关键词智能匹配新闻、未来研究工具。输入邮箱即可登录,无需密码。",
+            "link_tab": "邮件链接",
+            "code_tab": "验证码",
+            "link_sent": f"如果该邮箱在订阅名单中,登录链接已发送。请查收邮件 ({config.MAGIC_LINK_TTL_MINUTES} 分钟内有效)。",
+            "code_sent": f"如果该邮箱在订阅名单中,6 位数字验证码已发送 ({config.LOGIN_CODE_TTL_MINUTES} 分钟内有效)。请在下方输入。",
+            "send_link": "发送登录链接",
+            "link_hint": f"链接 {config.MAGIC_LINK_TTL_MINUTES} 分钟内有效,点击即可登录。",
+            "code_to": "验证码已发送至",
+            "code_placeholder": "6 位数字",
+            "login": "登录",
+            "resend_code": "重新发送验证码",
+            "send_code": "发送验证码",
+            "code_hint": f"6 位数字验证码, {config.LOGIN_CODE_TTL_MINUTES} 分钟内有效。",
+            "footer": "仅限受邀订阅者。如未收到邮件,请确认邮箱拼写或联系管理员。",
+            "errors": {
+                "invalid_link": "链接无效或已过期，请重新申请",
+                "account_inactive": "账号不存在或已暂停",
+                "invalid_code": "验证码错误或已过期，请重试",
+            },
+        },
+    }[lang]
+    err_display = login_text["errors"].get(err, err)
     next_safe = _h.escape(next or "/")
     email_safe = _h.escape(email or "")
     active_tab = "code" if tab == "code" else "link"
@@ -3091,16 +3360,15 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
     err_panel = (
         f"<div style='background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;"
         f"padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;'>"
-        f"⚠ {_h.escape(err)}</div>"
-        if err else ""
+        f"⚠ {_h.escape(err_display)}</div>"
+        if err_display else ""
     )
 
     link_sent_panel = (
-        """<div style='background:#dcfce7;border:1px solid #86efac;color:#166534;
+        f"""<div style='background:#dcfce7;border:1px solid #86efac;color:#166534;
               padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;
               line-height:1.6;'>
-            ✓ 如果该邮箱在订阅名单中,登录链接已发送。请查收邮件
-            (15 分钟内有效)。
+            ✓ {_h.escape(login_text["link_sent"])}
           </div>"""
         if sent and active_tab == "link" else ""
     )
@@ -3108,8 +3376,7 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
         f"""<div style='background:#dcfce7;border:1px solid #86efac;color:#166534;
               padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;
               line-height:1.6;'>
-            ✓ 如果该邮箱在订阅名单中,6 位数字验证码已发送
-            ({config.LOGIN_CODE_TTL_MINUTES} 分钟内有效)。请在下方输入。
+            ✓ {_h.escape(login_text["code_sent"])}
           </div>"""
         if sent and active_tab == "code" else ""
     )
@@ -3123,14 +3390,15 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
         return ("flex:1;padding:10px 0;text-align:center;font-size:14px;"
                 "font-weight:500;color:#888;background:#f9fafb;"
                 "border-bottom:2px solid transparent;text-decoration:none;")
-    tab_link_href = f"/login?tab=link&next={_h.escape(next or '/')}"
-    tab_code_href = f"/login?tab=code&next={_h.escape(next or '/')}"
+    next_q = quote(next or "/")
+    tab_link_href = f"/login?tab=link&next={next_q}"
+    tab_code_href = f"/login?tab=code&next={next_q}"
     link_tab_style = _tab_style(active_tab == "link")
     code_tab_style = _tab_style(active_tab == "code")
     tabs_html = (
         f"<div style='display:flex;margin:0 -32px 24px;border-bottom:1px solid #eee;'>"
-        f"<a href='{tab_link_href}' style='{link_tab_style}'>邮件链接</a>"
-        f"<a href='{tab_code_href}' style='{code_tab_style}'>验证码</a>"
+        f"<a href='{tab_link_href}' style='{link_tab_style}'>{_h.escape(login_text['link_tab'])}</a>"
+        f"<a href='{tab_code_href}' style='{code_tab_style}'>{_h.escape(login_text['code_tab'])}</a>"
         f"</div>"
     )
 
@@ -3148,11 +3416,11 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
               style='display:block;width:100%;padding:12px;font-size:14px;
                      color:#fff;background:#0f3460;border:none;border-radius:8px;
                      font-weight:600;cursor:pointer;'>
-        发送登录链接
+        {_h.escape(login_text["send_link"])}
       </button>
     </form>
     <p style='margin:16px 0 0;font-size:12px;color:#888;line-height:1.5;'>
-      链接 {config.MAGIC_LINK_TTL_MINUTES} 分钟内有效,点击即可登录。
+      {_h.escape(login_text["link_hint"])}
     </p>"""
 
     # ── Tab 2: Verification code (two-step) ──
@@ -3163,12 +3431,12 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
       <input type='hidden' name='next' value='{next_safe}'>
       <input type='hidden' name='email' value='{email_safe}'>
       <div style='font-size:13px;color:#666;margin-bottom:10px;'>
-        验证码已发送至 <b style='color:#0f3460;'>{email_safe}</b>
+        {_h.escape(login_text["code_to"])} <b style='color:#0f3460;'>{email_safe}</b>
       </div>
       <input type='text' name='code' required autofocus
              inputmode='numeric' pattern='[0-9]{{6}}' maxlength='6'
              autocomplete='one-time-code'
-             placeholder='6 位数字'
+             placeholder='{_h.escape(login_text["code_placeholder"])}'
              style='display:block;width:100%;box-sizing:border-box;
                     padding:12px 14px;font-size:18px;letter-spacing:6px;
                     text-align:center;border:1px solid #d1d5db;
@@ -3178,7 +3446,7 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
               style='display:block;width:100%;padding:12px;font-size:14px;
                      color:#fff;background:#0f3460;border:none;border-radius:8px;
                      font-weight:600;cursor:pointer;'>
-        登录
+        {_h.escape(login_text["login"])}
       </button>
     </form>
     <form method='post' action='/auth/request-code' style='margin:12px 0 0;'>
@@ -3188,7 +3456,7 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
               style='display:block;width:100%;padding:8px;font-size:12px;
                      color:#666;background:transparent;border:none;
                      cursor:pointer;text-decoration:underline;'>
-        重新发送验证码
+        {_h.escape(login_text["resend_code"])}
       </button>
     </form>"""
     else:
@@ -3207,30 +3475,29 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
               style='display:block;width:100%;padding:12px;font-size:14px;
                      color:#fff;background:#0f3460;border:none;border-radius:8px;
                      font-weight:600;cursor:pointer;'>
-        发送验证码
+        {_h.escape(login_text["send_code"])}
       </button>
     </form>
     <p style='margin:16px 0 0;font-size:12px;color:#888;line-height:1.5;'>
-      6 位数字验证码, {config.LOGIN_CODE_TTL_MINUTES} 分钟内有效。
+      {_h.escape(login_text["code_hint"])}
     </p>"""
 
     active_form = code_form if active_tab == "code" else link_form
     active_sent_panel = code_sent_panel if active_tab == "code" else link_sent_panel
 
     return f"""<!DOCTYPE html>
-<html lang='zh'><head>
+<html lang='{lang}'><head>
   <meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
-  <title>登录 · 看牛韵新闻</title>
+  <title>{_h.escape(login_text["title"])}</title>
 </head>
 <body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;
              background:#f4f6fb;margin:0;padding:48px 16px;color:#222;'>
   <div style='max-width:440px;margin:auto;background:#fff;
               border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.06);
               padding:32px;'>
-    <h1 style='margin:0 0 8px;font-size:22px;color:#0f3460;'>看牛韵新闻</h1>
+    <h1 style='margin:0 0 8px;font-size:22px;color:#0f3460;'>{_h.escape(login_text["brand"])}</h1>
     <p style='margin:0 0 24px;font-size:14px;color:#666;line-height:1.6;'>
-      会员专享:AI 板块轮动 dashboard、关键词智能匹配新闻、未来研究工具。
-      输入邮箱即可登录,无需密码。
+      {_h.escape(login_text["intro"])}
     </p>
     {tabs_html}
     {active_sent_panel}
@@ -3238,7 +3505,7 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
     {active_form}
     <p style='margin:24px 0 0;font-size:12px;color:#999;line-height:1.5;
               border-top:1px solid #eee;padding-top:16px;'>
-      仅限受邀订阅者。如未收到邮件,请确认邮箱拼写或联系管理员。
+      {_h.escape(login_text["footer"])}
     </p>
   </div>
 </body></html>"""
@@ -3255,8 +3522,9 @@ def request_magic_link(
     Always returns the same response regardless of whether the email exists,
     to prevent attackers from probing the subscriber list (email enumeration).
     """
+    from urllib.parse import quote
     email = (email or "").strip().lower()
-    sub = subscribers.get_by_email(email) if email else None
+    sub = _subscriber_for_login_email(email)
     if sub and sub.status == "active":
         try:
             token = subscribers.create_magic_link(email)
@@ -3267,7 +3535,7 @@ def request_magic_link(
     else:
         # Log only — don't expose to caller
         logger.info("Magic link requested for unknown/inactive email: %s", email)
-    return _redirect(f"/login?sent=1&next={next or '/'}")
+    return _redirect(f"/login?sent=1&next={quote(next or '/')}")
 
 
 @app.get("/auth/verify")
@@ -3275,10 +3543,10 @@ def verify_magic_link(request: Request, token: str, next: str = "/"):
     """Consume a one-time token, create a session, set cookie, redirect."""
     email = subscribers.consume_magic_link(token)
     if not email:
-        return _redirect("/login?err=" + "链接无效或已过期，请重新申请")
+        return _redirect("/login?err=invalid_link")
     sub = subscribers.get_by_email(email)
     if not sub or sub.status != "active":
-        return _redirect("/login?err=" + "账号不存在或已暂停")
+        return _redirect("/login?err=account_inactive")
     session_id = subscribers.create_session(sub.id)
     target = next if (next and next.startswith("/")) else "/"
     response = _redirect(target)
@@ -3300,7 +3568,7 @@ def request_login_code(
     """
     from urllib.parse import quote
     email = (email or "").strip().lower()
-    sub = subscribers.get_by_email(email) if email else None
+    sub = _subscriber_for_login_email(email)
     if sub and sub.status == "active":
         try:
             code = subscribers.create_login_code(email)
@@ -3332,11 +3600,11 @@ def verify_login_code(
         next_q = f"&next={quote(next)}" if next and next != "/" else ""
         return _redirect(
             f"/login?tab=code&email={quote(email)}&sent=1{next_q}"
-            f"&err=验证码错误或已过期，请重试"
+            f"&err=invalid_code"
         )
     sub = subscribers.get_by_email(verified_email)
     if not sub or sub.status != "active":
-        return _redirect("/login?err=" + "账号不存在或已暂停")
+        return _redirect("/login?err=account_inactive")
     session_id = subscribers.create_session(sub.id)
     target = next if (next and next.startswith("/")) else "/"
     response = _redirect(target)
@@ -3353,78 +3621,361 @@ def logout(request: Request):
     return response
 
 
+@app.post("/billing/checkout")
+def billing_checkout(sub=Depends(auth.require_subscriber)):
+    """Create a Stripe-hosted Checkout Session for VIP upgrade."""
+    if subscribers.is_paid(sub):
+        return _redirect("/account")
+    try:
+        stripe = _stripe_module()
+        customer_id = sub.stripe_customer_id
+        if not customer_id:
+            customer = stripe.Customer.create(
+                email=sub.email,
+                name=sub.name or None,
+                metadata={"subscriber_id": str(sub.id)},
+            )
+            customer_id = _stripe_id(customer)
+            subscribers.set_stripe_customer(sub.id, customer_id)
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            customer=customer_id,
+            line_items=[{"price": config.STRIPE_VIP_PRICE_ID, "quantity": 1}],
+            client_reference_id=str(sub.id),
+            metadata={"subscriber_id": str(sub.id)},
+            subscription_data={
+                "metadata": {
+                    "subscriber_id": str(sub.id),
+                    "subscriber_email": sub.email,
+                }
+            },
+            allow_promotion_codes=True,
+            success_url=_public_url("/account?checkout=success"),
+            cancel_url=_public_url("/account?checkout=cancelled"),
+        )
+        return RedirectResponse(_stripe_session_url(session), status_code=303)
+    except Exception as e:
+        logger.exception("Stripe Checkout creation failed for subscriber %s: %s", sub.id, e)
+        return _redirect("/account?billing=checkout_error")
+
+
+@app.post("/billing/portal")
+def billing_portal(sub=Depends(auth.require_subscriber)):
+    """Create a Stripe-hosted Customer Portal Session."""
+    if not sub.stripe_customer_id:
+        return _redirect("/account?billing=portal_unavailable")
+    try:
+        stripe = _stripe_module()
+        session = stripe.billing_portal.Session.create(
+            customer=sub.stripe_customer_id,
+            return_url=_public_url("/account"),
+        )
+        return RedirectResponse(_stripe_session_url(session), status_code=303)
+    except Exception as e:
+        logger.exception("Stripe Portal creation failed for subscriber %s: %s", sub.id, e)
+        return _redirect("/account?billing=portal_error")
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Receive Stripe subscription events and update local VIP access."""
+    try:
+        stripe = _stripe_module()
+    except RuntimeError as e:
+        logger.error("Stripe webhook called while misconfigured: %s", e)
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig, config.STRIPE_WEBHOOK_SECRET
+        )
+        event = _stripe_dict(event)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid payload")
+    except Exception as e:
+        stripe_error = getattr(stripe, "error", None)
+        sig_error = getattr(stripe_error, "SignatureVerificationError", None)
+        if sig_error and isinstance(e, sig_error):
+            raise HTTPException(status_code=400, detail="invalid signature")
+        raise
+
+    event_id = event.get("id") or ""
+    event_type = event.get("type") or ""
+    if subscribers.stripe_event_processed(event_id):
+        return {"received": True, "duplicate": True}
+
+    try:
+        _handle_stripe_event(stripe, event)
+    except Exception as e:
+        logger.exception("Stripe webhook processing failed for %s: %s", event_id, e)
+        raise HTTPException(status_code=500, detail="webhook processing failed")
+
+    subscribers.record_stripe_event(event_id, event_type)
+    return {"received": True}
+
+
 @app.get("/account", response_class=HTMLResponse)
 def account_page(request: Request, paywall: int = 0,
+                 checkout: str = "", billing: str = "",
                  sub=Depends(auth.require_subscriber)):
     """Logged-in user's status. `paywall=1` shows an upgrade banner."""
     import html as _h
+    lang = _ui_lang(request)
+    account_text = {
+        "en": {
+            "title": "Account · YunFlow News",
+            "heading": "My Account",
+            "paid_badge": "VIP Member",
+            "free_badge": "Free User",
+            "paywall": "This page is available to VIP members. Upgrade to continue.",
+            "checkout_success": "Payment submitted. VIP access will update as soon as Stripe confirms the subscription.",
+            "checkout_cancelled": "Checkout was cancelled. No payment was made.",
+            "billing_errors": {
+                "checkout_error": "Unable to start Stripe Checkout. Please try again later.",
+                "portal_error": "Unable to open Stripe billing portal. Please try again later.",
+                "portal_unavailable": "Billing portal is available after your Stripe customer record is created.",
+                "default": "Billing action failed. Please try again later.",
+            },
+            "access_ends": "VIP Access Ends",
+            "access_ends_note": "Your subscription is canceled. Benefits remain active until this date.",
+            "renews_on": "Renews On",
+            "renews_note": "Your VIP subscription is active and will renew automatically.",
+            "vip_access": "VIP Access",
+            "lifetime_note": "This account has lifetime VIP access.",
+            "upgrade_note": "Upgrade to unlock VIP-only research tools.",
+            "cancel_notice": "Subscription canceled. Your VIP access remains active until",
+            "at": "at",
+            "email": "Email",
+            "tier": "Tier",
+            "billing": "Billing",
+            "manage_billing": "Manage Billing",
+            "manual_vip": "Manual VIP account",
+            "upgrade": "Upgrade to VIP",
+            "stripe_missing": "Stripe is not configured",
+            "back": "Back Home",
+            "logout": "Log Out",
+        },
+        "zh": {
+            "title": "账号 · 看牛韵新闻",
+            "heading": "我的账号",
+            "paid_badge": "VIP 会员",
+            "free_badge": "免费用户",
+            "paywall": "该页面仅对 VIP 会员开放。升级后即可访问。",
+            "checkout_success": "付款已提交。Stripe 确认订阅后,VIP 权限会自动更新。",
+            "checkout_cancelled": "结账已取消,没有产生付款。",
+            "billing_errors": {
+                "checkout_error": "无法启动 Stripe Checkout,请稍后重试。",
+                "portal_error": "无法打开 Stripe 账单中心,请稍后重试。",
+                "portal_unavailable": "创建 Stripe 客户记录后即可打开账单中心。",
+                "default": "账单操作失败,请稍后重试。",
+            },
+            "access_ends": "VIP 权限结束",
+            "access_ends_note": "你的订阅已取消,但 VIP 权益会保留到这个日期。",
+            "renews_on": "下次续费",
+            "renews_note": "你的 VIP 订阅有效,并会自动续费。",
+            "vip_access": "VIP 权限",
+            "lifetime_note": "该账号拥有长期 VIP 权限。",
+            "upgrade_note": "升级后可解锁 VIP 专属研究工具。",
+            "cancel_notice": "订阅已取消。你的 VIP 权限仍会保留至",
+            "at": "",
+            "email": "邮箱",
+            "tier": "等级",
+            "billing": "账单",
+            "manage_billing": "管理账单",
+            "manual_vip": "手动 VIP 账号",
+            "upgrade": "升级为 VIP",
+            "stripe_missing": "Stripe 未配置",
+            "back": "返回首页",
+            "logout": "登出",
+        },
+    }[lang]
     paid = subscribers.is_paid(sub)
     tier_badge = (
         "<span style='background:#dcfce7;color:#166534;padding:2px 10px;"
-        "border-radius:999px;font-size:12px;font-weight:600;'>付费会员</span>"
+        f"border-radius:999px;font-size:12px;font-weight:600;'>{_h.escape(account_text['paid_badge'])}</span>"
         if paid else
         "<span style='background:#fef3c7;color:#92400e;padding:2px 10px;"
-        "border-radius:999px;font-size:12px;font-weight:600;'>免费用户</span>"
+        f"border-radius:999px;font-size:12px;font-weight:600;'>{_h.escape(account_text['free_badge'])}</span>"
     )
     paywall_panel = (
-        """<div style='background:#fef3c7;border:1px solid #fcd34d;color:#92400e;
+        f"""<div style='background:#fef3c7;border:1px solid #fcd34d;color:#92400e;
               padding:14px 18px;border-radius:8px;margin-bottom:20px;font-size:14px;
               line-height:1.6;'>
-            🔒 该页面仅对付费会员开放。如需开通,请联系管理员。
+            🔒 {_h.escape(account_text["paywall"])}
           </div>"""
         if paywall and not paid else ""
     )
-    paid_until = sub.paid_until or "—(无到期)"
+    checkout_panel = (
+        f"""<div style='background:#dcfce7;border:1px solid #86efac;color:#166534;
+              padding:14px 18px;border-radius:8px;margin-bottom:20px;font-size:14px;
+              line-height:1.6;'>
+            {_h.escape(account_text["checkout_success"])}
+          </div>"""
+        if checkout == "success" else (
+            f"""<div style='background:#f4f6fb;border:1px solid #d1d5db;color:#374151;
+                  padding:14px 18px;border-radius:8px;margin-bottom:20px;font-size:14px;
+                  line-height:1.6;'>
+                {_h.escape(account_text["checkout_cancelled"])}
+              </div>"""
+            if checkout == "cancelled" else ""
+        )
+    )
+    billing_panel = ""
+    if billing:
+        msg = account_text["billing_errors"].get(
+            billing, account_text["billing_errors"]["default"]
+        )
+        billing_panel = (
+            f"<div style='background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;"
+            f"padding:14px 18px;border-radius:8px;margin-bottom:20px;font-size:14px;"
+            f"line-height:1.6;'>{_h.escape(msg)}</div>"
+        )
+    access_day, access_time = _pretty_account_date(sub.paid_until, lang)
+    canceled_but_active = paid and bool(sub.stripe_cancel_at_period_end)
+    if paid:
+        if canceled_but_active:
+            access_label = account_text["access_ends"]
+            access_note = account_text["access_ends_note"]
+            access_accent = "#b45309"
+            access_bg = "#fffbeb"
+            access_border = "#fcd34d"
+        elif sub.paid_until:
+            access_label = account_text["renews_on"]
+            access_note = account_text["renews_note"]
+            access_accent = "#166534"
+            access_bg = "#f0fdf4"
+            access_border = "#86efac"
+        else:
+            access_label = account_text["vip_access"]
+            access_note = account_text["lifetime_note"]
+            access_accent = "#166534"
+            access_bg = "#f0fdf4"
+            access_border = "#86efac"
+    else:
+        access_label = account_text["vip_access"]
+        access_note = account_text["upgrade_note"]
+        access_accent = "#92400e"
+        access_bg = "#fffbeb"
+        access_border = "#fcd34d"
+    access_time_html = (
+        f"<div style='font-size:12px;color:#6b7280;margin-top:4px;'>{_h.escape(access_time)}</div>"
+        if access_time else ""
+    )
+    access_card = f"""
+        <div style='border:1px solid {access_border};background:{access_bg};
+                    border-radius:8px;padding:16px;'>
+          <div style='font-size:11px;color:#6b7280;text-transform:uppercase;
+                      letter-spacing:.5px;margin-bottom:8px;'>{access_label}</div>
+          <div style='font-size:20px;font-weight:700;color:{access_accent};line-height:1.2;'>
+            {_h.escape(access_day)}
+          </div>
+          {access_time_html}
+          <div style='font-size:12px;color:#4b5563;line-height:1.45;margin-top:10px;'>
+            {_h.escape(access_note)}
+          </div>
+        </div>"""
+    cancel_time_suffix = ""
+    if access_time:
+        cancel_time_suffix = (
+            f" {_h.escape(account_text['at'])} {_h.escape(access_time)}"
+            if account_text["at"] else f" {_h.escape(access_time)}"
+        )
+    cancellation_panel = (
+        f"""<div style='background:#fffbeb;border:1px solid #fcd34d;color:#78350f;
+              padding:14px 18px;border-radius:8px;margin-bottom:20px;font-size:14px;
+              line-height:1.6;'>
+            {_h.escape(account_text["cancel_notice"])}
+            <strong>{_h.escape(access_day)}</strong>{cancel_time_suffix}.
+          </div>"""
+        if canceled_but_active else ""
+    )
     name_line = (
         f"<div style='font-size:13px;color:#888;margin-top:4px;'>{_h.escape(sub.name)}</div>"
         if sub.name else ""
     )
+    if paid and sub.stripe_customer_id and _stripe_configured():
+        billing_action = f"""
+        <form method='post' action='/billing/portal' style='flex:1;margin:0;'>
+          <button type='submit'
+                  style='width:100%;padding:10px;font-size:14px;color:#fff;
+                         background:#0f3460;border:none;border-radius:8px;
+                         font-weight:600;cursor:pointer;'>
+            {_h.escape(account_text["manage_billing"])}
+          </button>
+        </form>"""
+    elif paid:
+        billing_action = f"""
+        <div style='flex:1;padding:10px;font-size:13px;color:#166534;
+                    background:#dcfce7;border-radius:8px;text-align:center;'>
+          {_h.escape(account_text["manual_vip"])}
+        </div>"""
+    elif _stripe_configured():
+        billing_action = f"""
+        <form method='post' action='/billing/checkout' style='flex:1;margin:0;'>
+          <button type='submit'
+                  style='width:100%;padding:10px;font-size:14px;color:#fff;
+                         background:#0f3460;border:none;border-radius:8px;
+                         font-weight:600;cursor:pointer;'>
+            {_h.escape(account_text["upgrade"])}
+          </button>
+        </form>"""
+    else:
+        billing_action = f"""
+        <div style='flex:1;padding:10px;font-size:13px;color:#92400e;
+                    background:#fef3c7;border-radius:8px;text-align:center;'>
+          {_h.escape(account_text["stripe_missing"])}
+        </div>"""
 
     return f"""<!DOCTYPE html>
-<html lang='zh'><head>
+<html lang='{lang}'><head>
   <meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
-  <title>账号 · 看牛韵新闻</title>
+  <title>{_h.escape(account_text["title"])}</title>
 </head>
 <body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;
              background:#f4f6fb;margin:0;padding:48px 16px;color:#222;'>
   <div style='max-width:560px;margin:auto;background:#fff;
               border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.06);
               padding:32px;'>
-    <h1 style='margin:0 0 24px;font-size:22px;color:#0f3460;'>我的账号</h1>
+    <h1 style='margin:0 0 24px;font-size:22px;color:#0f3460;'>{_h.escape(account_text["heading"])}</h1>
     {paywall_panel}
+    {checkout_panel}
+    {billing_panel}
+    {cancellation_panel}
     <div style='border:1px solid #e5e7eb;border-radius:8px;padding:20px;
                 margin-bottom:24px;'>
       <div style='font-size:11px;color:#888;text-transform:uppercase;
-                  letter-spacing:.5px;margin-bottom:6px;'>邮箱</div>
+                  letter-spacing:.5px;margin-bottom:6px;'>{_h.escape(account_text["email"])}</div>
       <div style='font-size:16px;font-weight:600;color:#222;'>{_h.escape(sub.email)}</div>
       {name_line}
     </div>
     <div style='display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;'>
       <div style='border:1px solid #e5e7eb;border-radius:8px;padding:16px;'>
         <div style='font-size:11px;color:#888;text-transform:uppercase;
-                    letter-spacing:.5px;margin-bottom:8px;'>等级</div>
+                    letter-spacing:.5px;margin-bottom:8px;'>{_h.escape(account_text["tier"])}</div>
         {tier_badge}
       </div>
-      <div style='border:1px solid #e5e7eb;border-radius:8px;padding:16px;'>
-        <div style='font-size:11px;color:#888;text-transform:uppercase;
-                    letter-spacing:.5px;margin-bottom:8px;'>到期</div>
-        <div style='font-size:13px;color:#374151;'>{_h.escape(paid_until)}</div>
-      </div>
+      {access_card}
+    </div>
+    <div style='border:1px solid #e5e7eb;border-radius:8px;padding:16px;
+                margin-bottom:24px;'>
+      <div style='font-size:11px;color:#888;text-transform:uppercase;
+                  letter-spacing:.5px;margin-bottom:8px;'>{_h.escape(account_text["billing"])}</div>
+      <div style='display:flex;gap:12px;'>{billing_action}</div>
     </div>
     <div style='display:flex;gap:12px;'>
       <a href='/' style='flex:1;text-align:center;padding:10px;
          font-size:14px;color:#0f3460;background:#eef2f8;border-radius:8px;
-         text-decoration:none;font-weight:500;'>返回首页</a>
+         text-decoration:none;font-weight:500;'>{_h.escape(account_text["back"])}</a>
       <form method='post' action='/auth/logout' style='flex:1;margin:0;'>
         <button type='submit'
                 style='width:100%;padding:10px;font-size:14px;color:#991b1b;
                        background:#fee2e2;border:none;border-radius:8px;
                        font-weight:500;cursor:pointer;'>
-          登出
+          {_h.escape(account_text["logout"])}
         </button>
       </form>
     </div>
   </div>
 </body></html>"""
-
-

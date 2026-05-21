@@ -41,6 +41,12 @@ class Subscriber:
     status: str
     tier: str
     paid_until: Optional[str]
+    stripe_customer_id: Optional[str] = None
+    stripe_subscription_id: Optional[str] = None
+    stripe_subscription_status: Optional[str] = None
+    stripe_current_period_end: Optional[str] = None
+    stripe_cancel_at_period_end: bool = False
+    stripe_cancel_at: Optional[str] = None
     preferences: dict = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
@@ -61,6 +67,12 @@ class Subscriber:
             status=row["status"],
             tier=row["tier"],
             paid_until=row["paid_until"],
+            stripe_customer_id=row["stripe_customer_id"],
+            stripe_subscription_id=row["stripe_subscription_id"],
+            stripe_subscription_status=row["stripe_subscription_status"],
+            stripe_current_period_end=row["stripe_current_period_end"],
+            stripe_cancel_at_period_end=bool(row["stripe_cancel_at_period_end"]),
+            stripe_cancel_at=row["stripe_cancel_at"],
             preferences=prefs,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -132,6 +144,30 @@ def get_by_id(sub_id: int) -> Optional[Subscriber]:
     return Subscriber.from_row(row) if row else None
 
 
+def get_by_stripe_customer_id(customer_id: str) -> Optional[Subscriber]:
+    customer_id = (customer_id or "").strip()
+    if not customer_id:
+        return None
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM subscribers WHERE stripe_customer_id = ?",
+            (customer_id,)
+        ).fetchone()
+    return Subscriber.from_row(row) if row else None
+
+
+def get_by_stripe_subscription_id(subscription_id: str) -> Optional[Subscriber]:
+    subscription_id = (subscription_id or "").strip()
+    if not subscription_id:
+        return None
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM subscribers WHERE stripe_subscription_id = ?",
+            (subscription_id,)
+        ).fetchone()
+    return Subscriber.from_row(row) if row else None
+
+
 # ── Subscriber writes ──────────────────────────────────────────────────────
 
 def add_subscriber(email: str, name: str = "", tier: str = "free",
@@ -152,6 +188,111 @@ def add_subscriber(email: str, name: str = "", tier: str = "free",
         sub_id = cur.lastrowid
     logger.info("Subscriber added: %s (tier=%s, status=%s)", email, tier, status)
     return get_by_id(sub_id)  # type: ignore[return-value]
+
+
+def set_stripe_customer(sub_id: int, customer_id: str) -> None:
+    """Attach a Stripe customer ID to a subscriber if it is not already set."""
+    if not customer_id:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE subscribers
+               SET stripe_customer_id =
+                       CASE
+                         WHEN stripe_customer_id IS NULL
+                              OR stripe_customer_id = ''
+                              OR stripe_customer_id NOT LIKE 'cus_%'
+                         THEN ?
+                         ELSE stripe_customer_id
+                       END,
+                   updated_at = ?
+               WHERE id = ?""",
+            (customer_id, _now(), sub_id)
+        )
+
+
+def sync_stripe_subscription(
+    sub_id: int,
+    *,
+    customer_id: str = "",
+    subscription_id: str = "",
+    status: str = "",
+    current_period_end: Optional[str] = None,
+    cancel_at_period_end: bool = False,
+    cancel_at: Optional[str] = None,
+) -> Optional[Subscriber]:
+    """Update local VIP access from a trusted Stripe subscription event."""
+    now = _now()
+    status = (status or "").strip()
+    has_access = (
+        bool(current_period_end)
+        and status in {"active", "trialing", "past_due", "unpaid"}
+        and current_period_end > now
+    )
+    tier = "paid" if has_access else "free"
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE subscribers
+               SET tier = ?,
+                   status = 'active',
+                   paid_until = ?,
+                   stripe_customer_id =
+                       CASE
+                         WHEN ? != '' AND (
+                           stripe_customer_id IS NULL
+                           OR stripe_customer_id = ''
+                           OR stripe_customer_id NOT LIKE 'cus_%'
+                         )
+                         THEN ?
+                         ELSE stripe_customer_id
+                       END,
+                   stripe_subscription_id = COALESCE(NULLIF(?, ''), stripe_subscription_id),
+                   stripe_subscription_status = COALESCE(NULLIF(?, ''), stripe_subscription_status),
+                   stripe_current_period_end = ?,
+                   stripe_cancel_at_period_end = ?,
+                   stripe_cancel_at = ?,
+                   updated_at = ?
+               WHERE id = ?""",
+            (
+                tier,
+                current_period_end,
+                customer_id,
+                customer_id,
+                subscription_id,
+                status,
+                current_period_end,
+                1 if cancel_at_period_end else 0,
+                cancel_at,
+                now,
+                sub_id,
+            )
+        )
+    return get_by_id(sub_id)
+
+
+def stripe_event_processed(event_id: str) -> bool:
+    event_id = (event_id or "").strip()
+    if not event_id:
+        return False
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM stripe_events WHERE event_id = ?",
+            (event_id,)
+        ).fetchone()
+    return bool(row)
+
+
+def record_stripe_event(event_id: str, event_type: str) -> None:
+    event_id = (event_id or "").strip()
+    if not event_id:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO stripe_events
+               (event_id, event_type, processed_at)
+               VALUES (?, ?, ?)""",
+            (event_id, event_type or "", _now())
+        )
 
 
 # ── Magic links ────────────────────────────────────────────────────────────

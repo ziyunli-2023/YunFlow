@@ -33,6 +33,12 @@ def _migrate(conn):
         "ALTER TABLE blog_posts ADD COLUMN pdf_url TEXT",
         "ALTER TABLE blog_posts ADD COLUMN paper_score REAL DEFAULT 0",
         "ALTER TABLE page_visits ADD COLUMN week TEXT",
+        "ALTER TABLE subscribers ADD COLUMN stripe_customer_id TEXT",
+        "ALTER TABLE subscribers ADD COLUMN stripe_subscription_id TEXT",
+        "ALTER TABLE subscribers ADD COLUMN stripe_subscription_status TEXT",
+        "ALTER TABLE subscribers ADD COLUMN stripe_current_period_end TEXT",
+        "ALTER TABLE subscribers ADD COLUMN stripe_cancel_at_period_end INTEGER DEFAULT 0",
+        "ALTER TABLE subscribers ADD COLUMN stripe_cancel_at TEXT",
     ):
         try:
             conn.execute(ddl)
@@ -191,11 +197,19 @@ def init_db():
                 status       TEXT NOT NULL DEFAULT 'active',
                 tier         TEXT NOT NULL DEFAULT 'free',
                 paid_until   TEXT,
+                stripe_customer_id TEXT,
+                stripe_subscription_id TEXT,
+                stripe_subscription_status TEXT,
+                stripe_current_period_end TEXT,
+                stripe_cancel_at_period_end INTEGER DEFAULT 0,
+                stripe_cancel_at TEXT,
                 preferences  TEXT,
                 created_at   TEXT NOT NULL,
                 updated_at   TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_subscribers_status ON subscribers(status, tier);
+            CREATE INDEX IF NOT EXISTS idx_subscribers_stripe_customer ON subscribers(stripe_customer_id);
+            CREATE INDEX IF NOT EXISTS idx_subscribers_stripe_subscription ON subscribers(stripe_subscription_id);
 
             CREATE TABLE IF NOT EXISTS magic_links (
                 token        TEXT PRIMARY KEY,
@@ -230,6 +244,12 @@ def init_db():
                 attempts     INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_login_codes_email ON login_codes(email, created_at);
+
+            CREATE TABLE IF NOT EXISTS stripe_events (
+                event_id     TEXT PRIMARY KEY,
+                event_type   TEXT NOT NULL,
+                processed_at TEXT NOT NULL
+            );
         """)
 
 

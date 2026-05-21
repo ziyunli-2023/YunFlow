@@ -52,6 +52,13 @@ def _send_smtp(to_email: str, subject: str, html_body: str, text_body: str = "")
         server.sendmail(config.EMAIL_SENDER, to_email, msg.as_string())
 
 
+def debug_auth_email_enabled() -> bool:
+    if not config.AUTH_DEBUG_EMAILS:
+        return False
+    base = (config.BASE_URL or "").lower()
+    return base.startswith("http://127.0.0.1") or base.startswith("http://localhost")
+
+
 def _magic_link_url(token: str, next_path: str = "/") -> str:
     next_q = ""
     if next_path and next_path != "/":
@@ -64,6 +71,9 @@ def send_magic_link_email(email: str, token: str, next_path: str = "/") -> None:
     """Email a one-time login link to the given address."""
     url = _magic_link_url(token, next_path)
     ttl = config.MAGIC_LINK_TTL_MINUTES
+    if debug_auth_email_enabled():
+        print(f"AUTH_DEBUG_EMAILS magic link for {email}: {url}", flush=True)
+        return
     html = f"""<html><body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;
   max-width:520px;margin:auto;padding:32px;background:#fff;color:#222;'>
   <div style='background:#0f3460;color:#fff;padding:18px 22px;border-radius:10px 10px 0 0;'>
@@ -94,6 +104,9 @@ def send_magic_link_email(email: str, token: str, next_path: str = "/") -> None:
 def send_login_code_email(email: str, code: str) -> None:
     """Email a 6-digit verification code (alternative to Magic Link)."""
     ttl = config.LOGIN_CODE_TTL_MINUTES
+    if debug_auth_email_enabled():
+        print(f"AUTH_DEBUG_EMAILS login code for {email}: {code}", flush=True)
+        return
     # Display the code as "123 456" for easier reading.
     code_spaced = f"{code[:3]} {code[3:]}" if len(code) == 6 else code
     html = f"""<html><body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;

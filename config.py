@@ -245,6 +245,7 @@ EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD", "")  # Gmail App Password
 # Comma-separated list of recipients, e.g. "a@x.com,b@x.com"
 EMAIL_RECIPIENTS: list[str] = [r.strip() for r in os.getenv("EMAIL_RECIPIENT", "").split(",") if r.strip()]
 EMAIL_RECIPIENT = EMAIL_RECIPIENTS[0] if EMAIL_RECIPIENTS else ""  # backwards compat
+AUTH_DEBUG_EMAILS = os.getenv("AUTH_DEBUG_EMAILS", "false").lower() == "true"
 
 # ── Web dashboard ──────────────────────────────────────────────────────────
 WEB_PORT = int(os.getenv("WEB_PORT", "8000"))
@@ -266,6 +267,13 @@ LOGIN_CODE_TTL_MINUTES      = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "10"))
 LOGIN_CODE_MAX_ATTEMPTS     = int(os.getenv("LOGIN_CODE_MAX_ATTEMPTS", "5"))
 LOGIN_CODE_COOLDOWN_SECONDS = int(os.getenv("LOGIN_CODE_COOLDOWN_SECONDS", "60"))
 LOGIN_CODE_HMAC_KEY         = os.getenv("LOGIN_CODE_HMAC_KEY", "") or os.getenv("EMAIL_APP_PASSWORD", "")
+
+# ── Stripe VIP subscription payments ────────────────────────────────────────
+# Checkout and Customer Portal are hosted by Stripe; local access changes only
+# after a signed webhook confirms subscription state.
+STRIPE_SECRET_KEY     = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_VIP_PRICE_ID   = os.getenv("STRIPE_VIP_PRICE_ID", "")
 
 # ── Earnings calendar (Finnhub) ────────────────────────────────────────────
 # Free tier: 60 req/min. Earnings + IPO calendars are free; economic calendar is paid.

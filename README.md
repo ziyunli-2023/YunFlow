@@ -62,7 +62,8 @@ YunFlow collects updates from leading AI researchers, labs, founders, technical 
   - ⚡ **Daily Briefing** — In-depth finance briefing with 财报/earnings context, IPO calendar signals, macro events, US stocks, and market-moving catalysts
   - 📅 **Earnings Calendar** — Finnhub-powered earnings + IPO + macro events, with mini-cards linking to related news
   - 🔍 **Smart Search** — Auto-hides context panels, ESC to exit, restores your prior view on clear
-- **Email Digest** — 4-slot Gmail schedule (06:00 早报 / 12:00 午报 / 18:00 晚报 / 22:00 夜报) with importance-ranked summary, top jokes, calendar preview, and per-category briefing
+- **Email Digest** — 4-slot Gmail schedule (06:00 morning / 12:00 midday / 18:00 evening / 22:00 late-night) with importance-ranked summary, top jokes, calendar preview, and per-category briefing
+- **VIP Subscriptions** — Stripe Checkout + Customer Portal with signed webhooks controlling paid access
 - **AI Translation** — DeepSeek API auto-translates English titles/summaries to Chinese *(optional)*
 - **MCP Server** — Claude Code can query the database directly via MCP tools
 
@@ -122,6 +123,10 @@ EMAIL_SENDER=your_gmail@gmail.com
 EMAIL_APP_PASSWORD=xxxx_xxxx_xxxx_xxxx
 EMAIL_RECIPIENT=where_to_receive@example.com
 
+# Local-only login testing with fake inboxes
+# Prints magic links / codes to server logs when BASE_URL is localhost/127.0.0.1
+AUTH_DEBUG_EMAILS=false
+
 # Required for Chinese translation (leave empty to disable)
 DEEPSEEK_API_KEY=sk-your_deepseek_key_here
 
@@ -131,6 +136,11 @@ FINNHUB_API_KEY=your_finnhub_key_here
 
 # Web dashboard port
 WEB_PORT=8000
+
+# Stripe VIP subscriptions (optional)
+STRIPE_SECRET_KEY=sk_test_or_live_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_VIP_PRICE_ID=price_...
 ```
 
 **All fields are optional** — the monitor runs fine with all fields empty (no tweets, no email, no translation).
@@ -143,6 +153,7 @@ WEB_PORT=8000
 | Gmail App Password | Google Account → Security → 2-Step Verification → App Passwords |
 | DeepSeek API Key | [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys) |
 | Finnhub API Key | [finnhub.io/dashboard](https://finnhub.io/dashboard) — free tier covers earnings + IPO calendars |
+| Stripe Keys | Stripe Dashboard → Developers → API keys, Billing price ID, and webhook endpoint `/stripe/webhook` |
 
 ### 3. Run
 
@@ -150,7 +161,24 @@ WEB_PORT=8000
 python main.py
 ```
 
-Open web dashboard: `http://localhost:8080`
+Open web dashboard: `http://localhost:8000`
+
+`python main.py` starts the full local app: web dashboard, RSS/X/papers/prediction-market monitors, earnings monitor, email scheduler, and translation worker.
+
+For UI-only development, you can run just the FastAPI website:
+
+```bash
+python -m uvicorn web_server:app --host 0.0.0.0 --port 8000
+```
+
+If you use the local fake-email login flow, set these in `.env`:
+
+```env
+BASE_URL=http://127.0.0.1:8000
+AUTH_DEBUG_EMAILS=true
+```
+
+Then watch the terminal output for printed magic links or 6-digit login codes.
 
 ---
 
@@ -197,8 +225,11 @@ Add to your Claude Code MCP config (`~/.claude/settings.json` or `.mcp.json`):
 ### Manual start
 
 ```bash
-# Foreground (useful for debugging)
+# Full app in the foreground (useful for debugging)
 python main.py
+
+# Website only in the foreground
+python -m uvicorn web_server:app --host 0.0.0.0 --port 8000
 
 # Background, logging to main.log
 python main.py >> logs/main.log 2>&1 &
