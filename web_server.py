@@ -176,13 +176,13 @@ def visit_stats():
 
 _MARKET_SYMBOLS = [
     {"symbol": "QQQ",       "name": "QQQ",    "name_en": "QQQ"},
-    {"symbol": "SPY",       "name": "SPY",    "name_en": "SPY"},
-    {"symbol": "DIA",       "name": "DOW",    "name_en": "DOW"},
-    {"symbol": "BTC-USD",   "name": "BTC",    "name_en": "BTC"},
     {"symbol": "GC=F",      "name": "GOLD",   "name_en": "Gold"},
     {"symbol": "SI=F",      "name": "SILVER", "name_en": "Silver"},
+    {"symbol": "BTC-USD",   "name": "BTC",    "name_en": "BTC"},
     {"symbol": "CL=F",      "name": "WTI",    "name_en": "WTI"},
     {"symbol": "DX-Y.NYB",  "name": "DXY",    "name_en": "DXY"},
+    {"symbol": "SPY",       "name": "SPY",    "name_en": "SPY"},
+    {"symbol": "DIA",       "name": "DOW",    "name_en": "DOW"},
 ]
 
 _YF_HEADERS = {
@@ -640,13 +640,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="market-bar" id="marketBar">
       <div class="market-tiles" id="marketTiles">
         <div class="market-tile" id="mkt-QQQ"><div class="market-tile-name">QQQ</div><div class="market-tile-price">—</div><div class="market-tile-change market-flat">—</div></div>
-        <div class="market-tile" id="mkt-SPY"><div class="market-tile-name">SPY</div><div class="market-tile-price">—</div><div class="market-tile-change market-flat">—</div></div>
-        <div class="market-tile" id="mkt-DIA"><div class="market-tile-name">DOW</div><div class="market-tile-price">—</div><div class="market-tile-change market-flat">—</div></div>
-        <div class="market-tile" id="mkt-BTC"><div class="market-tile-name">BTC</div><div class="market-tile-price">—</div><div class="market-tile-change market-flat">—</div></div>
         <div class="market-tile" id="mkt-XAU"><div class="market-tile-name">GOLD</div><div class="market-tile-price">—</div><div class="market-tile-change market-flat">—</div></div>
         <div class="market-tile" id="mkt-XAG"><div class="market-tile-name">SILVER</div><div class="market-tile-price">—</div><div class="market-tile-change market-flat">—</div></div>
+        <div class="market-tile" id="mkt-BTC"><div class="market-tile-name">BTC</div><div class="market-tile-price">—</div><div class="market-tile-change market-flat">—</div></div>
         <div class="market-tile" id="mkt-WTI"><div class="market-tile-name">WTI</div><div class="market-tile-price">—</div><div class="market-tile-change market-flat">—</div></div>
         <div class="market-tile" id="mkt-DXY"><div class="market-tile-name">DXY</div><div class="market-tile-price">—</div><div class="market-tile-change market-flat">—</div></div>
+        <div class="market-tile" id="mkt-SPY"><div class="market-tile-name">SPY</div><div class="market-tile-price">—</div><div class="market-tile-change market-flat">—</div></div>
+        <div class="market-tile" id="mkt-DIA"><div class="market-tile-name">DOW</div><div class="market-tile-price">—</div><div class="market-tile-change market-flat">—</div></div>
       </div>
       <div class="market-bar-footer"><span id="marketUpdated"></span><button class="market-refresh-btn" onclick="loadMarkets()" title="刷新">↻</button></div>
     </div>

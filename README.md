@@ -194,6 +194,33 @@ Add to your Claude Code MCP config (`~/.claude/settings.json` or `.mcp.json`):
 
 ## Running the Service
 
+### systemd service (Linux / WSL server)
+
+The recommended way to run the service. Logs go to `logs/app.log`.
+
+```bash
+# Start
+sudo systemctl start ai-news
+
+# Stop
+sudo systemctl stop ai-news
+
+# Restart (e.g. after pulling new code)
+sudo systemctl restart ai-news
+
+# View status
+sudo systemctl status ai-news
+
+# Tail live logs
+tail -f logs/app.log
+```
+
+Enable auto-start on boot:
+
+```bash
+sudo systemctl enable ai-news
+```
+
 ### Manual start
 
 ```bash
@@ -210,7 +237,7 @@ python main.py >> logs/main.log 2>&1 &
 ps aux | grep main.py | grep -v grep
 ```
 
-If the output is empty, the process is not running. Restart it manually or via launchd (see below).
+If the output is empty, the process is not running. Restart it with `sudo systemctl restart ai-news` or manually (see above).
 
 ---
 
