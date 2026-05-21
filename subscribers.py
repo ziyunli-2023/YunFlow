@@ -362,6 +362,183 @@ def expire_session(session_id: Optional[str]) -> None:
         conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
 
+# ── Membership requests (apply-for-access flow) ───────────────────────────
+#
+# Anyone (member or not) can submit a request via /login → 申请会员 tab. The
+# row lands in `membership_requests` with status='pending'. An admin (CLI
+# invite.py or /admin web page) reviews and either approves (creates a paid
+# subscriber + sends welcome email) or rejects (no email).
+
+@dataclass
+class MembershipRequest:
+    id: int
+    email: str
+    name: Optional[str]
+    reason: Optional[str]
+    source: Optional[str]
+    status: str
+    created_at: str
+    reviewed_at: Optional[str] = None
+    reviewed_by: Optional[str] = None
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "MembershipRequest":
+        return cls(
+            id=row["id"],
+            email=row["email"],
+            name=row["name"],
+            reason=row["reason"],
+            source=row["source"],
+            status=row["status"],
+            created_at=row["created_at"],
+            reviewed_at=row["reviewed_at"],
+            reviewed_by=row["reviewed_by"],
+        )
+
+
+class DuplicatePendingRequestError(Exception):
+    """Raised when the same email already has a pending request."""
+
+
+def create_membership_request(email: str, name: str = "", reason: str = "",
+                              source: str = "") -> MembershipRequest:
+    """Insert a new pending application. Raises DuplicatePendingRequestError
+    if a pending row already exists for the same email (to prevent spam)."""
+    email = (email or "").lower().strip()
+    if not email:
+        raise ValueError("email is required")
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT id FROM membership_requests "
+            "WHERE email = ? AND status = 'pending'",
+            (email,)
+        ).fetchone()
+        if existing:
+            raise DuplicatePendingRequestError(
+                f"a pending request already exists for {email}"
+            )
+        cur = conn.execute(
+            """INSERT INTO membership_requests
+               (email, name, reason, source, status, created_at)
+               VALUES (?, ?, ?, ?, 'pending', ?)""",
+            (email, (name or None), (reason or None), (source or None), _now())
+        )
+        req_id = cur.lastrowid
+        row = conn.execute(
+            "SELECT * FROM membership_requests WHERE id = ?", (req_id,)
+        ).fetchone()
+    logger.info("Membership request received: %s (id=%d)", email, req_id)
+    return MembershipRequest.from_row(row)
+
+
+def list_pending_requests() -> list[MembershipRequest]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM membership_requests "
+            "WHERE status = 'pending' ORDER BY created_at"
+        ).fetchall()
+    return [MembershipRequest.from_row(r) for r in rows]
+
+
+def list_all_requests(limit: int = 100) -> list[MembershipRequest]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM membership_requests "
+            "ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [MembershipRequest.from_row(r) for r in rows]
+
+
+def get_request_by_id(req_id: int) -> Optional[MembershipRequest]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM membership_requests WHERE id = ?", (req_id,)
+        ).fetchone()
+    return MembershipRequest.from_row(row) if row else None
+
+
+def get_pending_request_by_email(email: str) -> Optional[MembershipRequest]:
+    email = (email or "").lower().strip()
+    if not email:
+        return None
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM membership_requests "
+            "WHERE email = ? AND status = 'pending' "
+            "ORDER BY created_at DESC LIMIT 1", (email,)
+        ).fetchone()
+    return MembershipRequest.from_row(row) if row else None
+
+
+def approve_request(req_id: int, reviewed_by: str = "") -> tuple[MembershipRequest, Subscriber]:
+    """Mark request approved and create/upgrade the subscriber to paid.
+
+    Returns (request, subscriber). Idempotent on the subscriber side: if a
+    subscriber row already exists for the email, it is upgraded to
+    tier='paid' status='active' instead of erroring.
+    Raises ValueError if req_id is unknown or not pending.
+    """
+    req = get_request_by_id(req_id)
+    if req is None:
+        raise ValueError(f"unknown request id: {req_id}")
+    if req.status != "pending":
+        raise ValueError(f"request {req_id} is {req.status}, not pending")
+    now = _now()
+    # Create or upgrade the subscriber
+    existing = get_by_email(req.email)
+    if existing is None:
+        sub = add_subscriber(
+            email=req.email, name=req.name or "",
+            tier="paid", status="active",
+        )
+    else:
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE subscribers SET tier='paid', status='active', "
+                "updated_at=? WHERE id=?",
+                (now, existing.id)
+            )
+        sub = get_by_id(existing.id)  # type: ignore[assignment]
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE membership_requests SET status='approved', "
+            "reviewed_at=?, reviewed_by=? WHERE id=?",
+            (now, (reviewed_by or None), req_id)
+        )
+    logger.info("Membership approved: %s (req=%d, sub=%d, by=%s)",
+                req.email, req_id, sub.id, reviewed_by or "?")
+    return get_request_by_id(req_id), sub  # type: ignore[return-value]
+
+
+def reject_request(req_id: int, reviewed_by: str = "") -> MembershipRequest:
+    """Mark request rejected. No email is sent."""
+    req = get_request_by_id(req_id)
+    if req is None:
+        raise ValueError(f"unknown request id: {req_id}")
+    if req.status != "pending":
+        raise ValueError(f"request {req_id} is {req.status}, not pending")
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE membership_requests SET status='rejected', "
+            "reviewed_at=?, reviewed_by=? WHERE id=?",
+            (_now(), (reviewed_by or None), req_id)
+        )
+    logger.info("Membership rejected: %s (req=%d, by=%s)",
+                req.email, req_id, reviewed_by or "?")
+    return get_request_by_id(req_id)  # type: ignore[return-value]
+
+
+# ── Admin check (BUSINESS RULE) ────────────────────────────────────────────
+
+def is_admin(sub: Optional[Subscriber]) -> bool:
+    """True if `sub.email` is in config.ADMIN_EMAILS allowlist."""
+    if sub is None:
+        return False
+    if not config.ADMIN_EMAILS:
+        return False
+    return (sub.email or "").lower() in config.ADMIN_EMAILS
+
+
 # ── One-time seed from EMAIL_RECIPIENTS env ────────────────────────────────
 
 def seed_initial_subscribers() -> int:

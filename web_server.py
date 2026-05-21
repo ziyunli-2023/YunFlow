@@ -3081,16 +3081,19 @@ def _clear_session_cookie(response: Response) -> None:
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, next: str = "/", sent: int = 0,
-               err: str = "", tab: str = "link", email: str = ""):
-    """Render the login page with Tab toggle between Magic Link and verification code.
+               err: str = "", tab: str = "link", email: str = "",
+               applied: int = 0, non_member: int = 0):
+    """Render the login page with Tab toggle: Magic Link / 验证码 / 申请会员.
 
     Query params:
-      tab=link|code   which tab is active (default 'link')
-      sent=1          show the post-submit panel ("check your email" or
-                      "enter the 6-digit code" depending on tab)
-      email=...       pre-fill the email input on the code tab after request-code
-      err=...         shows a red error banner
-      next=...        post-login redirect target
+      tab=link|code|apply  which tab is active (default 'link')
+      sent=1               show the post-submit panel for link/code tabs
+      email=...            pre-fill the email input
+      err=...              shows a red error banner
+      next=...             post-login redirect target
+      applied=1            show "申请已提交" panel on the apply tab
+      non_member=1         show "该邮箱不在会员名单,请先申请" notice
+                           and auto-switch to apply tab
     """
     # If already logged in, send them to the dashboard
     if auth.current_subscriber(request):
@@ -3099,7 +3102,14 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
     import html as _h
     next_safe = _h.escape(next or "/")
     email_safe = _h.escape(email or "")
-    active_tab = "code" if tab == "code" else "link"
+    if non_member:
+        active_tab = "apply"
+    elif tab == "apply":
+        active_tab = "apply"
+    elif tab == "code":
+        active_tab = "code"
+    else:
+        active_tab = "link"
 
     err_panel = (
         f"<div style='background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;"
@@ -3112,8 +3122,7 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
         """<div style='background:#dcfce7;border:1px solid #86efac;color:#166534;
               padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;
               line-height:1.6;'>
-            ✓ 如果该邮箱在订阅名单中,登录链接已发送。请查收邮件
-            (15 分钟内有效)。
+            ✓ 登录链接已发送,请查收邮件 (15 分钟内有效)。
           </div>"""
         if sent and active_tab == "link" else ""
     )
@@ -3121,29 +3130,50 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
         f"""<div style='background:#dcfce7;border:1px solid #86efac;color:#166534;
               padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;
               line-height:1.6;'>
-            ✓ 如果该邮箱在订阅名单中,6 位数字验证码已发送
-            ({config.LOGIN_CODE_TTL_MINUTES} 分钟内有效)。请在下方输入。
+            ✓ 6 位数字验证码已发送 ({config.LOGIN_CODE_TTL_MINUTES} 分钟内有效),
+            请在下方输入。
           </div>"""
         if sent and active_tab == "code" else ""
+    )
+    applied_panel = (
+        """<div style='background:#dcfce7;border:1px solid #86efac;color:#166534;
+              padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;
+              line-height:1.6;'>
+            ✓ 申请已收到!我们已发送确认邮件给你,审批通过后会再发一封
+            含登录链接的欢迎邮件。
+          </div>"""
+        if applied and active_tab == "apply" else ""
+    )
+    non_member_panel = (
+        f"""<div style='background:#fef3c7;border:1px solid #fcd34d;color:#92400e;
+              padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;
+              line-height:1.6;'>
+            ⓘ {_h.escape(email or "该邮箱")} 还不是会员账号,请先在下方提交
+            申请。审批通过后会给你发欢迎邮件,届时就能登录了。
+          </div>"""
+        if non_member else ""
     )
 
     # Tabs — switching is done via plain links so JS isn't required.
     def _tab_style(active: bool) -> str:
         if active:
-            return ("flex:1;padding:10px 0;text-align:center;font-size:14px;"
+            return ("flex:1;padding:10px 0;text-align:center;font-size:13px;"
                     "font-weight:600;color:#0f3460;background:#fff;"
                     "border-bottom:2px solid #0f3460;text-decoration:none;")
-        return ("flex:1;padding:10px 0;text-align:center;font-size:14px;"
+        return ("flex:1;padding:10px 0;text-align:center;font-size:13px;"
                 "font-weight:500;color:#888;background:#f9fafb;"
                 "border-bottom:2px solid transparent;text-decoration:none;")
     tab_link_href = f"/login?tab=link&next={_h.escape(next or '/')}"
     tab_code_href = f"/login?tab=code&next={_h.escape(next or '/')}"
+    tab_apply_href = f"/login?tab=apply&next={_h.escape(next or '/')}"
     link_tab_style = _tab_style(active_tab == "link")
     code_tab_style = _tab_style(active_tab == "code")
+    apply_tab_style = _tab_style(active_tab == "apply")
     tabs_html = (
         f"<div style='display:flex;margin:0 -32px 24px;border-bottom:1px solid #eee;'>"
         f"<a href='{tab_link_href}' style='{link_tab_style}'>邮件链接</a>"
         f"<a href='{tab_code_href}' style='{code_tab_style}'>验证码</a>"
+        f"<a href='{tab_apply_href}' style='{apply_tab_style}'>申请会员</a>"
         f"</div>"
     )
 
@@ -3227,8 +3257,52 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
       6 位数字验证码, {config.LOGIN_CODE_TTL_MINUTES} 分钟内有效。
     </p>"""
 
-    active_form = code_form if active_tab == "code" else link_form
-    active_sent_panel = code_sent_panel if active_tab == "code" else link_sent_panel
+    # ── Tab 3: 申请会员 ──
+    apply_form = f"""
+    <form method='post' action='/membership/apply' style='margin:0;'>
+      <input type='email' name='email' required autocomplete='email'
+             placeholder='your@email.com'
+             value='{email_safe}'
+             {"autofocus" if active_tab == "apply" else ""}
+             style='display:block;width:100%;box-sizing:border-box;
+                    padding:12px 14px;font-size:14px;border:1px solid #d1d5db;
+                    border-radius:8px;margin-bottom:12px;'>
+      <input type='text' name='name' autocomplete='name'
+             placeholder='姓名 (可选)'
+             style='display:block;width:100%;box-sizing:border-box;
+                    padding:12px 14px;font-size:14px;border:1px solid #d1d5db;
+                    border-radius:8px;margin-bottom:12px;'>
+      <input type='text' name='source'
+             placeholder='你是怎么知道我们的? (可选)'
+             style='display:block;width:100%;box-sizing:border-box;
+                    padding:12px 14px;font-size:14px;border:1px solid #d1d5db;
+                    border-radius:8px;margin-bottom:12px;'>
+      <textarea name='reason' rows='3'
+                placeholder='申请理由 (可选,简单说说你想了解什么)'
+                style='display:block;width:100%;box-sizing:border-box;
+                       padding:12px 14px;font-size:14px;border:1px solid #d1d5db;
+                       border-radius:8px;margin-bottom:14px;font-family:inherit;
+                       resize:vertical;'></textarea>
+      <button type='submit'
+              style='display:block;width:100%;padding:12px;font-size:14px;
+                     color:#fff;background:#0f3460;border:none;border-radius:8px;
+                     font-weight:600;cursor:pointer;'>
+        提交申请
+      </button>
+    </form>
+    <p style='margin:16px 0 0;font-size:12px;color:#888;line-height:1.5;'>
+      提交后我们会发一封确认邮件给你。审批通过后,你会收到含登录链接的欢迎邮件。
+    </p>"""
+
+    if active_tab == "apply":
+        active_form = apply_form
+        active_sent_panel = applied_panel
+    elif active_tab == "code":
+        active_form = code_form
+        active_sent_panel = code_sent_panel
+    else:
+        active_form = link_form
+        active_sent_panel = link_sent_panel
 
     return f"""<!DOCTYPE html>
 <html lang='zh'><head>
@@ -3246,6 +3320,7 @@ def login_page(request: Request, next: str = "/", sent: int = 0,
       输入邮箱即可登录,无需密码。
     </p>
     {tabs_html}
+    {non_member_panel}
     {active_sent_panel}
     {err_panel}
     {active_form}
@@ -3263,11 +3338,12 @@ def request_magic_link(
     email: str = Form(...),
     next: str = Form("/"),
 ):
-    """Issue a one-time login URL to the given email — if it's on the allowlist.
+    """Issue a one-time login URL to the given email.
 
-    Always returns the same response regardless of whether the email exists,
-    to prevent attackers from probing the subscriber list (email enumeration).
+    If the email is not on the subscriber list, redirect to the apply tab
+    instead of silently dropping (user wants non-members to know).
     """
+    from urllib.parse import quote
     email = (email or "").strip().lower()
     sub = subscribers.get_by_email(email) if email else None
     if sub and sub.status == "active":
@@ -3276,11 +3352,13 @@ def request_magic_link(
             auth.send_magic_link_email(email, token, next_path=next or "/")
         except Exception as e:
             logger.error("Failed to send magic link to %s: %s", email, e)
-            # Still return the same success-looking response below
-    else:
-        # Log only — don't expose to caller
-        logger.info("Magic link requested for unknown/inactive email: %s", email)
-    return _redirect(f"/login?sent=1&next={next or '/'}")
+        return _redirect(f"/login?sent=1&next={quote(next or '/')}")
+    # Non-member (or inactive): nudge to apply
+    logger.info("Magic link requested for unknown/inactive email: %s", email)
+    next_q = f"&next={quote(next)}" if next and next != "/" else ""
+    return _redirect(
+        f"/login?tab=apply&non_member=1&email={quote(email)}{next_q}"
+    )
 
 
 @app.get("/auth/verify")
@@ -3307,27 +3385,27 @@ def request_login_code(
 ):
     """Issue a 6-digit verification code to the given email.
 
-    Anti-enumeration: always redirect to the verify step regardless of
-    whether the email exists, is inactive, or is in cooldown. The
-    `email` arg is echoed back in the URL so the verify form is pre-filled.
+    If the email is not on the subscriber list, redirect to the apply tab
+    so the user knows they need to apply first.
     """
     from urllib.parse import quote
     email = (email or "").strip().lower()
     sub = subscribers.get_by_email(email) if email else None
+    next_q = f"&next={quote(next)}" if next and next != "/" else ""
     if sub and sub.status == "active":
         try:
             code = subscribers.create_login_code(email)
             auth.send_login_code_email(email, code)
         except subscribers.LoginCodeCooldownError:
-            # Treat as success from the caller's perspective; the existing
-            # code is still valid, user should check their inbox.
             logger.info("Login code cooldown for %s — skipping resend", email)
         except Exception as e:
             logger.error("Failed to send login code to %s: %s", email, e)
-    else:
-        logger.info("Login code requested for unknown/inactive email: %s", email)
-    next_q = f"&next={quote(next)}" if next and next != "/" else ""
-    return _redirect(f"/login?tab=code&email={quote(email)}&sent=1{next_q}")
+        return _redirect(f"/login?tab=code&email={quote(email)}&sent=1{next_q}")
+    # Non-member (or inactive): nudge to apply
+    logger.info("Login code requested for unknown/inactive email: %s", email)
+    return _redirect(
+        f"/login?tab=apply&non_member=1&email={quote(email)}{next_q}"
+    )
 
 
 @app.post("/auth/verify-code")
@@ -3364,6 +3442,67 @@ def logout(request: Request):
     response = _redirect("/login")
     _clear_session_cookie(response)
     return response
+
+
+# ── Membership application ────────────────────────────────────────────────
+
+# Cap free-text inputs so abusive payloads can't bloat the DB or break the
+# admin UI. Length-bounded server-side; the form has no client max attribute
+# on purpose so the truncation message is the source of truth.
+_APPLY_NAME_MAX   = 80
+_APPLY_REASON_MAX = 1000
+_APPLY_SOURCE_MAX = 200
+
+
+@app.post("/membership/apply")
+def membership_apply(
+    request: Request,
+    email: str = Form(...),
+    name: str = Form(""),
+    reason: str = Form(""),
+    source: str = Form(""),
+):
+    """Accept a membership application from any visitor.
+
+    - Already-paid members get redirected to /login (they don't need to apply).
+    - Duplicate pending requests are treated as success (idempotent).
+    - Confirmation email is best-effort — failure does NOT roll back the row.
+    """
+    from urllib.parse import quote
+    email = (email or "").strip().lower()
+    name   = (name or "").strip()[:_APPLY_NAME_MAX]
+    reason = (reason or "").strip()[:_APPLY_REASON_MAX]
+    source = (source or "").strip()[:_APPLY_SOURCE_MAX]
+
+    if not email or "@" not in email:
+        return _redirect("/login?tab=apply&err=" + quote("请输入有效邮箱"))
+
+    # If they're already a paid member, no need to apply
+    existing = subscribers.get_by_email(email)
+    if existing and subscribers.is_paid(existing):
+        return _redirect(
+            "/login?tab=link&email=" + quote(email)
+            + "&err=" + quote("该邮箱已是会员,请直接登录")
+        )
+
+    try:
+        subscribers.create_membership_request(
+            email=email, name=name, reason=reason, source=source,
+        )
+    except subscribers.DuplicatePendingRequestError:
+        # Already-pending → still tell the user "we got it" so they aren't
+        # confused; don't resend the confirmation email.
+        return _redirect(f"/login?tab=apply&applied=1&email={quote(email)}")
+    except ValueError as e:
+        return _redirect(f"/login?tab=apply&err={quote(str(e))}")
+
+    try:
+        auth.send_application_received_email(email, name)
+    except Exception as e:
+        logger.error("Confirmation email failed for %s: %s", email, e)
+        # Row already written — surface "applied=1" anyway, admin will still see it
+
+    return _redirect(f"/login?tab=apply&applied=1&email={quote(email)}")
 
 
 @app.get("/account", response_class=HTMLResponse)
@@ -3439,5 +3578,179 @@ def account_page(request: Request, paywall: int = 0,
     </div>
   </div>
 </body></html>"""
+
+
+# ── Admin: membership requests review ─────────────────────────────────────
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(request: Request, sub=Depends(auth.require_admin),
+               flash: str = "", err: str = ""):
+    """Admin-only page to review pending membership requests."""
+    import html as _h
+    pending = subscribers.list_pending_requests()
+    recent = [r for r in subscribers.list_all_requests(limit=50)
+              if r.status != "pending"]
+
+    flash_panel = (
+        f"<div style='background:#dcfce7;border:1px solid #86efac;color:#166534;"
+        f"padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;'>"
+        f"✓ {_h.escape(flash)}</div>"
+        if flash else ""
+    )
+    err_panel = (
+        f"<div style='background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;"
+        f"padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:14px;'>"
+        f"⚠ {_h.escape(err)}</div>"
+        if err else ""
+    )
+
+    def _row(r) -> str:
+        meta_bits = []
+        if r.name:
+            meta_bits.append(f"姓名: {_h.escape(r.name)}")
+        if r.source:
+            meta_bits.append(f"来源: {_h.escape(r.source)}")
+        meta_bits.append(f"提交: {_h.escape(r.created_at)}")
+        meta_html = " · ".join(meta_bits)
+        reason_html = (
+            f"<div style='font-size:13px;color:#374151;background:#f9fafb;"
+            f"border-left:3px solid #cbd5e1;padding:8px 12px;margin-top:10px;"
+            f"white-space:pre-wrap;'>{_h.escape(r.reason)}</div>"
+            if r.reason else ""
+        )
+        return f"""
+    <div style='border:1px solid #e5e7eb;border-radius:8px;padding:16px;
+                margin-bottom:12px;'>
+      <div style='display:flex;justify-content:space-between;align-items:flex-start;
+                  gap:12px;'>
+        <div style='flex:1;min-width:0;'>
+          <div style='font-size:15px;font-weight:600;color:#0f3460;
+                      word-break:break-all;'>{_h.escape(r.email)}</div>
+          <div style='font-size:12px;color:#888;margin-top:4px;'>{meta_html}</div>
+        </div>
+        <div style='display:flex;gap:8px;flex-shrink:0;'>
+          <form method='post' action='/admin/requests/{r.id}/approve'
+                style='margin:0;'>
+            <button type='submit'
+                    style='padding:8px 14px;font-size:13px;color:#fff;
+                           background:#16a34a;border:none;border-radius:6px;
+                           cursor:pointer;font-weight:600;'>通过</button>
+          </form>
+          <form method='post' action='/admin/requests/{r.id}/reject'
+                style='margin:0;'>
+            <button type='submit'
+                    style='padding:8px 14px;font-size:13px;color:#991b1b;
+                           background:#fee2e2;border:none;border-radius:6px;
+                           cursor:pointer;font-weight:500;'
+                    onclick="return confirm('确认拒绝此申请?');">拒绝</button>
+          </form>
+        </div>
+      </div>
+      {reason_html}
+    </div>"""
+
+    pending_html = (
+        "".join(_row(r) for r in pending)
+        if pending else
+        "<p style='color:#888;font-size:14px;padding:20px;text-align:center;'>"
+        "暂无待审批的会员申请。</p>"
+    )
+
+    def _recent_row(r) -> str:
+        status_color = "#16a34a" if r.status == "approved" else "#991b1b"
+        status_label = "已通过" if r.status == "approved" else "已拒绝"
+        return (
+            f"<tr style='border-bottom:1px solid #f1f5f9;'>"
+            f"<td style='padding:8px;font-size:13px;'>{_h.escape(r.email)}</td>"
+            f"<td style='padding:8px;font-size:12px;color:#888;'>"
+            f"{_h.escape(r.created_at)}</td>"
+            f"<td style='padding:8px;font-size:12px;color:{status_color};'>"
+            f"{status_label}</td>"
+            f"<td style='padding:8px;font-size:12px;color:#888;'>"
+            f"{_h.escape(r.reviewed_by or '')}</td>"
+            f"</tr>"
+        )
+    recent_html = (
+        f"<table style='width:100%;border-collapse:collapse;font-size:13px;'>"
+        f"<thead><tr style='background:#f9fafb;text-align:left;'>"
+        f"<th style='padding:8px;'>邮箱</th>"
+        f"<th style='padding:8px;'>提交</th>"
+        f"<th style='padding:8px;'>状态</th>"
+        f"<th style='padding:8px;'>审批人</th>"
+        f"</tr></thead><tbody>"
+        + "".join(_recent_row(r) for r in recent)
+        + "</tbody></table>"
+        if recent else
+        "<p style='color:#888;font-size:13px;padding:12px 0;'>暂无历史记录。</p>"
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang='zh'><head>
+  <meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+  <title>会员审批 · 看牛韵新闻</title>
+</head>
+<body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+             background:#f4f6fb;margin:0;padding:32px 16px;color:#222;'>
+  <div style='max-width:780px;margin:auto;'>
+    <div style='display:flex;justify-content:space-between;align-items:center;
+                margin-bottom:20px;'>
+      <h1 style='margin:0;font-size:22px;color:#0f3460;'>会员审批</h1>
+      <a href='/' style='font-size:13px;color:#0f3460;text-decoration:none;'>
+        返回首页 →
+      </a>
+    </div>
+    {flash_panel}
+    {err_panel}
+    <div style='background:#fff;border-radius:12px;
+                box-shadow:0 4px 24px rgba(0,0,0,.06);padding:24px;
+                margin-bottom:20px;'>
+      <h2 style='margin:0 0 16px;font-size:15px;color:#0f3460;'>
+        待审批 ({len(pending)})
+      </h2>
+      {pending_html}
+    </div>
+    <div style='background:#fff;border-radius:12px;
+                box-shadow:0 4px 24px rgba(0,0,0,.06);padding:24px;'>
+      <h2 style='margin:0 0 12px;font-size:15px;color:#0f3460;'>
+        最近 50 条历史
+      </h2>
+      {recent_html}
+    </div>
+    <p style='text-align:center;font-size:12px;color:#888;margin-top:24px;'>
+      登录身份: {_h.escape(sub.email)}
+    </p>
+  </div>
+</body></html>"""
+
+
+@app.post("/admin/requests/{req_id}/approve")
+def admin_approve_request(req_id: int, sub=Depends(auth.require_admin)):
+    """Approve a pending request: mark approved + upgrade subscriber +
+    send welcome email with first Magic Link."""
+    from urllib.parse import quote
+    try:
+        req, new_sub = subscribers.approve_request(req_id, reviewed_by=sub.email)
+    except ValueError as e:
+        return _redirect(f"/admin?err={quote(str(e))}")
+    # Best-effort welcome email — failure doesn't undo the approval
+    try:
+        token = subscribers.create_magic_link(new_sub.email)
+        auth.send_welcome_email(new_sub.email, new_sub.name or "", token)
+        flash = f"已通过 {new_sub.email},欢迎邮件已发送。"
+    except Exception as e:
+        logger.error("Welcome email failed for %s: %s", new_sub.email, e)
+        flash = f"已通过 {new_sub.email},但欢迎邮件发送失败 ({e})。"
+    return _redirect(f"/admin?flash={quote(flash)}")
+
+
+@app.post("/admin/requests/{req_id}/reject")
+def admin_reject_request(req_id: int, sub=Depends(auth.require_admin)):
+    """Reject a pending request. No email is sent to the applicant."""
+    from urllib.parse import quote
+    try:
+        req = subscribers.reject_request(req_id, reviewed_by=sub.email)
+    except ValueError as e:
+        return _redirect(f"/admin?err={quote(str(e))}")
+    return _redirect(f"/admin?flash={quote(f'已拒绝 {req.email}。')}")
 
 

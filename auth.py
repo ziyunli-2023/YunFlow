@@ -158,6 +158,34 @@ def send_welcome_email(email: str, name: str, token: str) -> None:
     _send_smtp(email, "欢迎加入「看牛韵新闻」", html, text)
 
 
+def send_application_received_email(email: str, name: str = "") -> None:
+    """Confirm to the applicant that we've received their membership request."""
+    greeting = f"嗨 {name}," if name else "你好,"
+    html = f"""<html><body style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+  max-width:520px;margin:auto;padding:32px;background:#fff;color:#222;'>
+  <div style='background:#0f3460;color:#fff;padding:18px 22px;border-radius:10px 10px 0 0;'>
+    <h1 style='margin:0;font-size:18px;'>看牛韵新闻 · 已收到你的会员申请</h1>
+  </div>
+  <div style='padding:24px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;'>
+    <p style='font-size:14px;line-height:1.7;color:#374151;'>{greeting}</p>
+    <p style='font-size:14px;line-height:1.7;color:#374151;'>
+      我们已经收到你的会员申请,稍后会人工审核。审核通过后,
+      你会收到一封欢迎邮件,内含登录链接,即可访问会员专享内容。
+    </p>
+    <p style='font-size:14px;line-height:1.7;color:#374151;'>
+      会员专享: AI 板块轮动 dashboard、关键词智能匹配新闻、
+      每天 07:00 / 12:00 / 20:00 三封 digest。
+    </p>
+    <p style='font-size:12px;color:#aaa;margin:24px 0 0;border-top:1px solid #eee;padding-top:16px;'>
+      如果你没有提交过申请,可以忽略这封邮件。
+    </p>
+  </div>
+</body></html>"""
+    text = (f"{greeting}\n我们已经收到你的会员申请,稍后会人工审核。\n"
+            "审核通过后,你会收到一封欢迎邮件,内含登录链接。\n")
+    _send_smtp(email, "看牛韵新闻 · 已收到你的会员申请", html, text)
+
+
 # ── FastAPI dependencies ───────────────────────────────────────────────────
 
 def current_subscriber(request: Request) -> Optional[Subscriber]:
@@ -185,6 +213,20 @@ def require_subscriber(request: Request) -> Subscriber:
         status_code=status.HTTP_302_FOUND,
         headers={"Location": target},
         detail="redirect to login",
+    )
+
+
+def require_admin(request: Request,
+                  sub: Subscriber = Depends(require_subscriber)) -> Subscriber:
+    """Reject non-admin users. Admin = email in config.ADMIN_EMAILS."""
+    if subscribers.is_admin(sub):
+        return sub
+    if request.url.path.startswith("/api/"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="admin required")
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="admin access required",
     )
 
 

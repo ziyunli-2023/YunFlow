@@ -230,6 +230,23 @@ def init_db():
                 attempts     INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_login_codes_email ON login_codes(email, created_at);
+
+            -- Membership applications submitted via the /login → 申请会员 tab.
+            -- status: 'pending' | 'approved' | 'rejected'
+            -- On approve, a row is also inserted into subscribers (tier='paid').
+            CREATE TABLE IF NOT EXISTS membership_requests (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                email        TEXT NOT NULL,
+                name         TEXT,
+                reason       TEXT,
+                source       TEXT,
+                status       TEXT NOT NULL DEFAULT 'pending',
+                created_at   TEXT NOT NULL,
+                reviewed_at  TEXT,
+                reviewed_by  TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_mreq_status ON membership_requests(status, created_at);
+            CREATE INDEX IF NOT EXISTS idx_mreq_email  ON membership_requests(email);
         """)
 
 

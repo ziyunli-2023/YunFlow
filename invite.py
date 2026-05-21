@@ -9,12 +9,21 @@ Usage
     python invite.py user@example.com --status paused        # toggle existing
     python invite.py user@example.com --revoke                # delete subscriber
 
+Membership requests (apply-for-access flow)
+-------------------------------------------
+    python invite.py --requests                  # list pending applications
+    python invite.py --approve 7                 # approve by request id
+    python invite.py --approve alice@example.com # approve by email
+    python invite.py --reject 7                  # reject by id (no email sent)
+
 Notes
 -----
 - Default tier is `paid` (since this is an invite-only system).
 - Default behavior sends a welcome email (containing the first Magic Link).
 - If the address already exists, you can update fields via --status / --tier;
   use --revoke to remove a subscriber entirely.
+- --approve auto-creates/upgrades the subscriber to `paid` and sends the
+  welcome email (same path as `invite.py <email>`).
 """
 
 import argparse
@@ -128,6 +137,77 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_list_requests() -> int:
+    pending = subscribers.list_pending_requests()
+    if not pending:
+        print("No pending membership requests.")
+        return 0
+    print(f"\n{len(pending)} pending request(s):\n")
+    print(f"  {'ID':>3}  {'email':<32} {'submitted':<20}  name / source")
+    print("  " + "-" * 80)
+    for r in pending:
+        meta = r.name or ""
+        if r.source:
+            meta = f"{meta} | {r.source}" if meta else r.source
+        print(f"  [{r.id:>3}] {r.email:<32} {r.created_at:<20}  {meta}")
+        if r.reason:
+            # Indent reason for readability; truncate over-long bodies
+            reason = r.reason.strip().replace("\n", " ")
+            if len(reason) > 200:
+                reason = reason[:200] + "…"
+            print(f"        理由: {reason}")
+    print()
+    return 0
+
+
+def _resolve_request(ident: str) -> "subscribers.MembershipRequest | None":
+    """Accept either a numeric id or an email and return the matching request."""
+    ident = (ident or "").strip()
+    if not ident:
+        return None
+    if ident.isdigit():
+        return subscribers.get_request_by_id(int(ident))
+    return subscribers.get_pending_request_by_email(ident)
+
+
+def cmd_approve_request(ident: str, reviewed_by: str) -> int:
+    req = _resolve_request(ident)
+    if req is None:
+        print(f"× No request matches {ident!r}", file=sys.stderr)
+        return 1
+    if req.status != "pending":
+        print(f"× Request {req.id} is already {req.status}.", file=sys.stderr)
+        return 1
+    try:
+        req, sub = subscribers.approve_request(req.id, reviewed_by=reviewed_by)
+    except ValueError as e:
+        print(f"× {e}", file=sys.stderr)
+        return 1
+    print(f"✓ Approved request {req.id} for {req.email}")
+    _print_row(sub)
+    try:
+        token = subscribers.create_magic_link(sub.email)
+        auth.send_welcome_email(sub.email, sub.name or "", token)
+        print(f"✓ Welcome email sent to {sub.email}")
+    except Exception as e:
+        print(f"⚠ Approval saved but welcome email failed: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_reject_request(ident: str, reviewed_by: str) -> int:
+    req = _resolve_request(ident)
+    if req is None:
+        print(f"× No request matches {ident!r}", file=sys.stderr)
+        return 1
+    if req.status != "pending":
+        print(f"× Request {req.id} is already {req.status}.", file=sys.stderr)
+        return 1
+    req = subscribers.reject_request(req.id, reviewed_by=reviewed_by)
+    print(f"✓ Rejected request {req.id} for {req.email} (no email sent)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Invite a new subscriber or manage existing ones.",
@@ -151,6 +231,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Skip the welcome email (no Magic Link sent)")
     p.add_argument("--revoke", action="store_true",
                    help="Delete the subscriber and all their sessions/tokens")
+    p.add_argument("--requests", action="store_true",
+                   help="List pending membership requests and exit")
+    p.add_argument("--approve", metavar="ID|EMAIL",
+                   help="Approve a pending request (by id or email); "
+                        "creates paid subscriber + sends welcome email")
+    p.add_argument("--reject", metavar="ID|EMAIL",
+                   help="Reject a pending request (no email sent)")
     return p
 
 
@@ -162,8 +249,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list:
         return cmd_list(args)
+    if args.requests:
+        return cmd_list_requests()
+    reviewed_by = "cli"
+    if args.approve:
+        return cmd_approve_request(args.approve, reviewed_by=reviewed_by)
+    if args.reject:
+        return cmd_reject_request(args.reject, reviewed_by=reviewed_by)
     if not args.email:
-        print("× email argument is required (or use --list)", file=sys.stderr)
+        print("× email argument is required (or use --list / --requests / "
+              "--approve / --reject)", file=sys.stderr)
         return 1
     if args.revoke:
         return cmd_revoke(args.email.lower().strip())

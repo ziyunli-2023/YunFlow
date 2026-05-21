@@ -267,6 +267,13 @@ LOGIN_CODE_MAX_ATTEMPTS     = int(os.getenv("LOGIN_CODE_MAX_ATTEMPTS", "5"))
 LOGIN_CODE_COOLDOWN_SECONDS = int(os.getenv("LOGIN_CODE_COOLDOWN_SECONDS", "60"))
 LOGIN_CODE_HMAC_KEY         = os.getenv("LOGIN_CODE_HMAC_KEY", "") or os.getenv("EMAIL_APP_PASSWORD", "")
 
+# Admin allowlist — emails that can access /admin to review membership requests.
+# Comma-separated, e.g. "you@example.com,partner@example.com". Empty list = no
+# one can access /admin via the web (CLI invite.py --requests still works).
+ADMIN_EMAILS: list[str] = [
+    e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()
+]
+
 # ── Earnings calendar (Finnhub) ────────────────────────────────────────────
 # Free tier: 60 req/min. Earnings + IPO calendars are free; economic calendar is paid.
 # Get a key at https://finnhub.io/dashboard (free signup).
